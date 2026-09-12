@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/* 剪辑室配色：深炭灰打底 + 暖琥珀主色。
+   分镜师长时间盯画面，低亮度背景更合适；琥珀色统一用于「可操作」与
+   「当前焦点」，避免用高饱和色抢画面描述的注意力。 */
+@theme {
+  --color-ink: #0a0c0f;
+  --color-panel: #12161b;
+  --color-panel2: #191e25;
+  --color-panel3: #212831;
+  --color-line: #262e38;
+  --color-line2: #333d49;
+  --color-fg: #e7ebf0;
+  --color-muted: #8994a3;
+  --color-faint: #5d6774;
+  --color-accent: #e0a94a;
+  --color-accent-dim: #8a6725;
+  --color-danger: #e0574a;
+  --color-ok: #4fb783;
+
+  --font-sans: var(--font-geist-sans), "PingFang SC", "Microsoft YaHei",
+    "Hiragino Sans GB", system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Consolas,
+    monospace;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条压暗，避免打断深色界面 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line2);
+  border-radius: 5px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-rise {
+  animation: rise 0.28s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise {
+    animation: none;
+  }
+}
+
+/* 流式生成中的骨架条 */
+@keyframes sweep {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-panel2) 25%,
+    var(--color-panel3) 50%,
+    var(--color-panel2) 75%
+  );
+  background-size: 200% 100%;
+  animation: sweep 1.4s linear infinite;
+}
+
+textarea,
+input,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
