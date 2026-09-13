@@ -6,6 +6,22 @@
 不是「输入一段话，吐一堆好看的图」——它输出的是能交给画师和声音设计师开工的分镜表：
 镜号、景别、运镜、可拍的画面描述、逐字核验过的台词、音效、时长、以及每个切点为什么这么切。
 
+## 线上演示
+
+**<https://story-pi-weld.vercel.app>**
+
+> ⚠️ **需要开代理 / VPN 才能访问。**
+>
+> 该地址托管在 Vercel，而 `*.vercel.app` 这个默认域名在境内被 **DNS 污染 +
+> SNI 阻断**：DNS 会被解析到无关的海外地址（实测返回 Facebook 的地址段），
+> TLS 握手被直接重置——**裸连连首页都加载不出来**，不是只有生成会失败。
+>
+> 这与本项目无关，是域名层面的网络限制，Vercel 也**无法为默认的 `vercel.app`
+> 域名做国内优化**（官方的中国优化 CNAME 只对自定义域名生效）。
+>
+> 开代理后打开即是**实时模式**，顶部显示 `实时 · qwen3.7-flash-2026-07-15`
+> ——背后是阿里百炼的 qwen，走 Anthropic 兼容网关，不是回放的 mock 数据。
+
 ## 快速开始
 
 ```bash
@@ -145,5 +161,26 @@ node scripts/probe.mjs    # 这个端点到底吐哪些事件、预算花在哪
 
 ## 部署
 
-`npm run build && npm start`。所有 API 路由都是 `runtime = "nodejs"`；
-`/api/generate` 的 `maxDuration` 是 300 秒，长文生成比较慢，注意平台的上限。
+线上跑在 Vercel（Hobby 套餐），三个环境变量：
+
+| 变量 | 值 |
+| --- | --- |
+| `ANTHROPIC_BASE_URL` | `https://dashscope.aliyuncs.com/apps/anthropic` |
+| `ANTHROPIC_API_KEY` | 阿里百炼的 Key（`sk-` 开头） |
+| `ANTHROPIC_MODEL` | `qwen3.7-flash-2026-07-15` |
+
+⚠️ 百炼的 **Key 格式必须和端点配套**：按量计费的 `sk-` Key 配
+`dashscope.aliyuncs.com/apps/anthropic`，Coding Plan 的 `sk-sp-` Key 才配
+`coding.dashscope.aliyuncs.com/apps/anthropic`。配错会返回 401
+`invalid_api_key` / 「invalid access token or token expired」——**报错文案会把人
+误导成「Key 过期」，实际是端点选错了**。
+
+所有 API 路由都是 `runtime = "nodejs"`；`/api/generate` 的 `maxDuration` 是 300 秒，
+长文生成比较慢，注意平台的上限。
+
+**默认函数区域是美东 `iad1`，建议改成香港 `hkg1`。** 函数调用的是国内的模型 API，
+跨太平洋往返会明显拖慢生成。改法：Vercel 项目 → Settings → Functions → Region。
+Hobby 只允许选**一个**区域，所以**要先把默认勾选的 Washington, D.C. 取消掉**
+再选香港，否则会因为选中两个区域直接部署失败。改完需要重新部署。
+
+本地跑：`npm run build && npm start`。
