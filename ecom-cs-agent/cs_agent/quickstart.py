@@ -296,7 +296,15 @@ class _scenario_env:
     """临时覆盖环境变量（场景级的故障注入用），退出时还原。
 
     端口实例是进程级单例、不会重建，但故障注入是在**每次调用时**读环境变量的
-    （见 `integrations/mock/chaos.py`），所以场景级覆盖是生效的。
+    （见 `integrations/mock/chaos.py`），所以 direct 模式下场景级覆盖自然生效。
+
+    ⚠️ 但 MCP 模式下**不成立**：网关是一个常驻子进程，它的环境变量在
+    进程启动那一刻就定格了，之后改父进程的 `os.environ` 完全送不进去。
+    所以在进出场景时都调一次 `reset_ports()`：它会顺带关掉 MCP 会话，
+    让下一次调用拿着**当前**的环境重新拉起网关。
+
+    这一条不修的话，`TOOL_GATEWAY=mcp` 下「注入物流故障」的场景会静默地
+    跑成正常路径 —— 而它看起来只是「这次降级没触发」，不会报任何错。
     """
 
     def __init__(self, overrides: dict):
@@ -307,6 +315,9 @@ class _scenario_env:
         for name, value in self.overrides.items():
             self.saved[name] = os.environ.get(name)
             os.environ[name] = value
+        if self.overrides:
+            # 环境就位之后再重建端口：MCP 会话要按新环境重启
+            self._rebuild_ports()
         return self
 
     def __exit__(self, *exc):
@@ -315,7 +326,17 @@ class _scenario_env:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = old
+        if self.overrides:
+            # 注入过的场景必须把网关也换掉：否则它带着上一次注入的环境活着，
+            # 下一个场景会静默地继承那批故障
+            self._rebuild_ports()
         return False
+
+    @staticmethod
+    def _rebuild_ports() -> None:
+        from integrations.factory import reset_ports
+
+        reset_ports()
 
 
 def run_scenario(key: str, *, auto_yes: bool = False) -> int:
@@ -325,7 +346,8 @@ def run_scenario(key: str, *, auto_yes: bool = False) -> int:
     spec = SCENARIOS[key]
     repeat = int(spec.get("repeat", 1))
     print(f"\n{_hr('═')}")
-    print(f"  场景：{spec['title']}  [{key}]")
+    print(f"  场景：{spec['title']}  [{key}]  "
+          f"（TOOL_GATEWAY={os.environ.get('TOOL_GATEWAY', 'direct')}）")
     print(f"  输入：{spec['input']!r}")
     print(f"  说明：{spec['desc']}")
     if spec.get("env"):
@@ -384,7 +406,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="列出所有场景")
     parser.add_argument("-s", "--scenario", action="append", help="只跑指定场景（可重复）")
     parser.add_argument("--yes", "-y", action="store_true", help="非交互：审批自动通过")
+    parser.add_argument(
+        "--gateway",
+        choices=("direct", "mcp"),
+        help="工具调用路径：direct=进程内直调（默认），mcp=经 MCP 网关（需已装 mcp SDK）",
+    )
     args = parser.parse_args(argv)
+
+    # 在 import demo / 建图之前钉住：端口是进程级单例，第一次取值就定型了
+    if args.gateway:
+        os.environ["TOOL_GATEWAY"] = args.gateway
 
     if args.list:
         print("\n可用场景：")
@@ -399,10 +430,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"未知场景：{', '.join(unknown)}（用 --list 查看可用场景）", file=sys.stderr)
         return 2
 
+    gateway = os.environ.get("TOOL_GATEWAY", "direct")
     print(f"\n{_hr('═')}")
     print("  电商智能客服与运营助手 —— 离线演示")
     print(f"  模式：LLM_MODE={os.environ['LLM_MODE']}  "
-          f"INTEGRATION_MODE={os.environ['INTEGRATION_MODE']}  （全程不联网）")
+          f"INTEGRATION_MODE={os.environ['INTEGRATION_MODE']}  "
+          f"TOOL_GATEWAY={gateway}  （全程不联网）")
+    if gateway == "mcp":
+        print("  工具：经 MCP 网关（stdio 子进程）调用，与 direct 模式结果应当完全一致")
     print(_hr("═"))
 
     failed = 0

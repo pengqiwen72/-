@@ -160,7 +160,7 @@ def _fan_out(order_id: str, sku_ids: List[str],
 def _build_result(order: Dict[str, Any], order_id: str,
                   logistics_raw: Any, stock_raw: Any,
                   degraded: List[str], costs: Dict[str, float],
-                  trace: MapTrace) -> OrderQueryResult:
+                  trace: MapTrace, fanout_wall: float) -> OrderQueryResult:
     """把归一后的三路数据装成结果模型。"""
     logistics = None
     if logistics_raw is not None:
@@ -201,12 +201,19 @@ def _build_result(order: Dict[str, Any], order_id: str,
         degraded=degraded,
     )
 
-    total = sum(costs.values())
-    slowest = max(costs.values()) if costs else 0.0
+    # 三个数分开报，别揉成一个「总耗时」：
+    #   单路耗时 —— 每一路自己花了多久（含网关往返）
+    #   并发段   —— 物流与库存**同时**发出的那段墙钟时间，约等于两者较慢的那个
+    #   串行约需 —— 三路依次调用的总和，也就是不做并发编排要付的代价
+    # 只报一个合计数的话，一旦某一路（比如订单主数据）是冷的，
+    # 总数会比两个分项之和大出一个量级，读的人只会以为并发没生效。
+    serial = sum(costs.values())
     result.normalize_trace = trace.lines() + [
-        f"并行取数：物流 {costs.get('logistics', 0) * 1000:.0f}ms、"
-        f"库存 {costs.get('inventory', 0) * 1000:.0f}ms，"
-        f"并发总耗时 {total * 1000:.0f}ms（串行约需 {slowest * 2 * 1000:.0f}ms）"
+        f"取数耗时：订单 {costs.get('order', 0) * 1000:.0f}ms、"
+        f"物流 {costs.get('logistics', 0) * 1000:.0f}ms、"
+        f"库存 {costs.get('inventory', 0) * 1000:.0f}ms；"
+        f"物流+库存并发段 {fanout_wall * 1000:.0f}ms"
+        f"（三路串行约需 {serial * 1000:.0f}ms）"
     ]
     return result
 
@@ -281,10 +288,14 @@ def fetch_node(state: SubOrderQueryState, config: RunnableConfig):
     order = normalize_order(raw_order, trace=trace)
     sku_ids = [item["sku_id"] for item in order["items"] if item["sku_id"]]
 
+    fanout_started = time.perf_counter()
     logistics_raw, stock_raw, degraded, costs = _fan_out(order_id, sku_ids, order["warehouse"])
     costs["order"] = order_cost
+    fanout_wall = time.perf_counter() - fanout_started
 
-    result = _build_result(order, order_id, logistics_raw, stock_raw, degraded, costs, trace)
+    result = _build_result(
+        order, order_id, logistics_raw, stock_raw, degraded, costs, trace, fanout_wall
+    )
     result.candidates = candidates
 
     if logistics_raw is not None:

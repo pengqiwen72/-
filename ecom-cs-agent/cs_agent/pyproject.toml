@@ -1,7 +1,7 @@
 [project]
 name = "cs-agent"
 version = "0.1.0"
-description = "cs_用户画像 agent智能体系统"
+description = "电商智能客服与运营助手：LangGraph 多链路编排 + RAG + HITL 人工审批"
 requires-python = "==3.12.*"
 dependencies = [
     "fastapi==0.125.0",
@@ -22,6 +22,11 @@ dependencies = [
     "typing-extensions==4.15.0",
     "uvicorn==0.38.0",
 ]
+[project.optional-dependencies]
+# MCP 工具网关。只有 TOOL_GATEWAY=mcp 时才需要，
+# 默认的 direct 路径（离线演示）完全不依赖它。
+mcp = ["mcp>=2.0"]
+
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
