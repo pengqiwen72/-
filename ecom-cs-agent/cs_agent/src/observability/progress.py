@@ -38,6 +38,13 @@ STAGE_LABELS: dict[str, str] = {
     "refund_submitted": "退款已提交",
     "handoff": "转人工",
     "report_built": "周报生成完成",
+    # 周报链路内部的分段（取数 → 算数 → 说话），终端与工作台都按这些标签显示
+    "report_window": "周报统计周期",
+    "report_collect": "周报取数",
+    "report_metric": "指标计算",
+    "report_anomaly": "异常识别",
+    "report_narrative": "生成摘要",
+    "report_verify_failed": "摘要数字校验未通过",
     "node_start": "开始",
     "node_done": "完成",
 }

@@ -97,7 +97,7 @@ def update_customer_tags(external_id: str, follow_user_id: str, tag_ids_add: Lis
 
 @debug
 def get_customer_profile(external_id: str, follow_user_id: str) -> CustomerProfile:
-    """获取客户profile"""
+    """获取客户画像"""
     
     profile_dict = store_client.get_profile_by_external_id(external_id, follow_user_id)
 
@@ -107,12 +107,12 @@ def get_customer_profile(external_id: str, follow_user_id: str) -> CustomerProfi
     try:
         return CustomerProfile.model_validate(profile_dict)
     except Exception as e:
-        logger.error(f"获取客户profile失败: {e}")
+        logger.error(f"获取客户画像失败: {e}")
         return CustomerProfile()
     
 @debug
 def update_customer_profile(external_id: str, follow_user_id: str, profile: CustomerProfile) -> bool:
-    """更新客户profile"""
+    """更新客户画像"""
     if not external_id or not follow_user_id or not profile:
         return False
         

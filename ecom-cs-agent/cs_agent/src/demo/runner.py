@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional, Tuple
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -63,6 +63,50 @@ class RunResult:
     @property
     def node_results(self) -> list:
         return (self.state or {}).get("node_result") or []
+
+
+def _plain(value: Any) -> Any:
+    """把状态里的对象转成可 JSON 序列化的结构。
+
+    状态里装的是 pydantic 模型（TaskResult / OrderQueryResult / WeeklyReport …），
+    直接丢给 JSONResponse 会 TypeError。这里统一走 `model_dump(mode="json")`，
+    而不是逐个字段手写 —— 模型加字段时不会漏。
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json")
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_plain(v) for v in value]
+    return str(value)
+
+
+def _serialize_interrupt(item: Any) -> dict:
+    """中断对象（`Interrupt`）转成给前端用的结构。
+
+    `value` 就是节点传给 `interrupt()` 的那份载荷（审批卡片要展示的内容），
+    `id` 用于前端做「同一次中断不要重复提交」的去重。
+    """
+    return {
+        "id": str(getattr(item, "id", "") or ""),
+        "value": _plain(getattr(item, "value", item)),
+    }
+
+
+def hitl_payload(decision: Any) -> Any:
+    """归一化人工审批的决策值。
+
+    HITL 协议要求 `{"confirmed": "ok"|"discard"|"recreate"}`，但调用方（命令行、
+    HTTP、测试）更想直接传 `"ok"`。归一化只做在这一处：
+
+    ⚠️ 这里刻意做了兼容而不是要求调用方自己包 —— `interrupt()` 会把 resume 值
+    **原样**返回给节点，多包一层就会落进「指令异常」兜底分支，而报错信息完全
+    看不出是包了两层。把归一化收敛在一处，就不存在「某个入口忘了包/多包了」。
+    """
+    return decision if isinstance(decision, dict) else {HITL_FIELD_NAME: decision}
 
 
 def build_demo_graph(*, checkpointer=None, store=None, load_seed: Optional[bool] = None):
@@ -117,10 +161,51 @@ class DemoRunner:
                 "thread_id": thread_id,
                 "user_id": self.user_id,
                 "external_id": self.external_id,
-            }
+            },
+            # Langfuse 的会话归组：同一线程的多次调用（发起 + 若干次审批恢复）
+            # 在图里是好几段独立的 trace，没有这几个键在后台就是一堆散点。
+            # 它们只在启用追踪时被读取，不启用时是无害的普通元数据。
+            "metadata": {
+                "langfuse_session_id": thread_id,
+                "langfuse_user_id": self.user_id,
+                "langfuse_tags": ["cs-agent", "demo"],
+            },
         }
 
     # ---------- 执行 ----------
+
+    def _iter(self, payload: Any, config: dict) -> Iterator[Tuple[str, dict]]:
+        """消费图的事件流，逐条吐出 `(kind, data)`。
+
+        kind 取 `"progress"`（custom 通道的进度事件）或 `"update"`（节点更新）。
+        不在这里取最终快照 —— 快照要等流真正结束才有意义，交给调用方。
+        """
+        stream = self.graph.stream(
+            payload,
+            config,
+            stream_mode=["updates", "custom"],
+            subgraphs=True,
+        )
+
+        for chunk in stream:
+            # subgraphs=True 时事件是 (namespace, mode, data) 三元组
+            if isinstance(chunk, tuple) and len(chunk) == 3:
+                _namespace, mode, data = chunk
+            elif isinstance(chunk, tuple) and len(chunk) == 2:
+                mode, data = chunk
+            else:  # pragma: no cover - 兼容不同 langgraph 版本的形状
+                mode, data = "updates", chunk
+
+            if mode == "custom":
+                yield "progress", dict(data) if isinstance(data, dict) else {"raw": data}
+            elif mode == "updates" and isinstance(data, dict):
+                yield "update", data
+
+    def _snapshot(self, config: dict, result: RunResult) -> RunResult:
+        snapshot = self.graph.get_state(config)
+        result.state = dict(snapshot.values or {})
+        result.interrupts = list(snapshot.interrupts or [])
+        return result
 
     def _consume(self, payload: Any, config: dict) -> RunResult:
         """喂输入并消费事件流，直到结束或停在 interrupt。"""
@@ -128,48 +213,64 @@ class DemoRunner:
         result = RunResult(thread_id=thread_id)
 
         try:
-            stream = self.graph.stream(
-                payload,
-                config,
-                stream_mode=["updates", "custom"],
-                subgraphs=True,
-            )
-
-            for chunk in stream:
-                # subgraphs=True 时事件是 (namespace, mode, data) 三元组
-                if isinstance(chunk, tuple) and len(chunk) == 3:
-                    _namespace, mode, data = chunk
-                elif isinstance(chunk, tuple) and len(chunk) == 2:
-                    mode, data = chunk
-                else:  # pragma: no cover - 兼容不同 langgraph 版本的形状
-                    mode, data = "updates", chunk
-
-                if mode == "custom":
-                    event = dict(data) if isinstance(data, dict) else {"raw": data}
-                    result.events.append(event)
+            for kind, data in self._iter(payload, config):
+                if kind == "progress":
+                    result.events.append(data)
                     if self.on_event:
-                        self.on_event(event)
-
-                elif mode == "updates":
-                    if isinstance(data, dict):
-                        result.updates.append(data)
-
+                        self.on_event(data)
+                else:
+                    result.updates.append(data)
         except Exception as e:
             logger.error(f"图执行失败：{e}", exc_info=True)
             result.error = str(e)
 
-        # 取状态快照（含中断信息）
-        snapshot = self.graph.get_state(config)
-        result.state = dict(snapshot.values or {})
-        result.interrupts = list(snapshot.interrupts or [])
+        return self._snapshot(config, result)
 
-        return result
+    def stream(self, payload: Any, config: dict) -> Iterator[dict]:
+        """逐条吐出事件，供 SSE 这类「边跑边推」的场景使用。
+
+        与 `_consume` 共用同一套消费逻辑，区别只在**不做缓冲**：
+        要是一边跑一边攒再一次性返回，前端的进度条要等到图跑完才动，
+        流式推送就白做了。
+
+        `type` 取 `"progress"` / `"update"`，最后一条是终态事件；
+        序列以 `"done"` / `"interrupt"` / `"error"` 三者之一收尾。
+
+        ⚠️ 所有事件的字段都在**顶层**（`{"type": "progress", "stage": ..., "label": ...}`），
+        不再套一层 `data`。曾经 progress 是 `{"type", "data": {...}}`、终态却是平的，
+        两种形状混在一起：SSE 那边直接转发，前端读 `data.label` 就全是 undefined ——
+        帧照样在推，只看「有没有事件」的测试根本发现不了。
+        """
+        thread_id = config["configurable"]["thread_id"]
+        try:
+            for kind, data in self._iter(payload, config):
+                yield {"type": kind, **(data if isinstance(data, dict) else {"data": data})}
+        except Exception as e:
+            logger.error(f"图执行失败：{e}", exc_info=True)
+            yield {"type": "error", "message": str(e)}
+            return
+
+        result = self._snapshot(config, RunResult(thread_id=thread_id))
+        if result.interrupts:
+            yield {"type": "interrupt", "thread_id": thread_id,
+                   "interrupts": [_serialize_interrupt(i) for i in result.interrupts]}
+        else:
+            yield {"type": "done", "thread_id": thread_id,
+                   "task_result": _plain(result.task_result)}
 
     def start(self, task_input: str, *, thread_id: Optional[str] = None) -> RunResult:
         """发起一次任务。"""
         thread_id = thread_id or new_thread_id()
         config = self.thread_config(thread_id)
         return self._consume({"task_input": task_input}, config)
+
+    def resume_command(self, decision: Any = "ok") -> Command:
+        """构造恢复用的 Command。
+
+        单独抽出来，是因为流式入口（SSE）要自己调 `stream()`，
+        而它同样需要这份归一化 —— 见 `hitl_payload` 的说明。
+        """
+        return Command(resume=hitl_payload(decision))
 
     def resume(self, thread_id: str, decision: Any = "ok") -> RunResult:
         """
@@ -181,17 +282,9 @@ class DemoRunner:
           * 标量 `"ok"` / `"discard"` / `"recreate"` —— 自动包成 HITL 协议要求的
             `{"confirmed": <decision>}`，这是日常用法；
           * 完整字典 `{"confirmed": "ok"}` —— 原样透传，给需要自定义协议的节点用。
-
-        ⚠️ 这里刻意做了归一化：HITL 的 resume 值会被 `interrupt()` 原样返回，
-        多包一层就会落进「指令异常」兜底分支，而报错信息完全看不出是包了两层。
         """
-        if isinstance(decision, dict):
-            payload = decision
-        else:
-            payload = {HITL_FIELD_NAME: decision}
-
         config = self.thread_config(thread_id)
-        return self._consume(Command(resume=payload), config)
+        return self._consume(self.resume_command(decision), config)
 
     def get_state(self, thread_id: str) -> dict:
         """读取线程当前状态（不推进执行）。"""

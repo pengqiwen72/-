@@ -115,7 +115,7 @@ def load_customer_info_node(state: CsState, config: RunnableConfig):
         customer_tags: CustomerTags       = get_customer_tags(external_id = external_id, follow_user_id = follow_user_id)
 
         logger.debug(f"客户信息: {customer_info}")
-        logger.debug(f"客户Profile: {customer_profile}")
+        logger.debug(f"客户画像: {customer_profile}")
         logger.debug(f"客户标签: {customer_tags}")
         
         return {

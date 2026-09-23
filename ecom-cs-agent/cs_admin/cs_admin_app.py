@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-销售智能体管理后台 Flask 应用
+客服运营后台 Flask 应用。
+
+以查询展示为主：员工、客户、标签体系、会话记录、订单。
+数据不在本地库里，全部来自 LangGraph 平台的 Store（经 `cs_store_api` 读）。
+
+因此它需要平台服务在跑（`cs_agent/run_cs_agent` 起的 langgraph dev），
+**不属于「零配置离线演示」那一套** —— 离线那套看根目录的 quickstart.py。
 """
 
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 import json
 import os
+import secrets
 from dotenv import load_dotenv
 from functools import wraps
 from cs_store_api.cs_store_api import create_cs_store_api, CsStoreAPI
@@ -14,11 +21,50 @@ from cs_store_api.cs_store_api import create_cs_store_api, CsStoreAPI
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your-secret-key-here')  # 在生产环境中应该使用更安全的密钥
+
+_secret = os.getenv('FLASK_SECRET_KEY')
+if not _secret:
+    # 不内置一把「所有部署共用」的签名密钥。不配就每次启动随机生成，
+    # 副作用是重启后所有人的登录态失效 —— 这个副作用刻意留着，
+    # 它会让人尽快去配一个真密钥，而不是把不安全的默认值带上线。
+    _secret = secrets.token_hex(32)
+    app.logger.warning('未配置 FLASK_SECRET_KEY，已生成进程级随机密钥；重启后需要重新登录')
+app.secret_key = _secret
 
 
-# 创建数据客户端
-client: CsStoreAPI = create_cs_store_api(url = os.getenv('CS_SERVER_URL'), user_id = os.getenv('CS_USER_ID'), password = os.getenv('CS_PASSWORD'))
+class _LazyStoreClient:
+    """首次用到时才去连平台的 Store。
+
+    ⚠️ 不能在模块导入时就连：`create_cs_store_api` 一上来就要
+    CS_SERVER_URL / CS_USER_ID / CS_PASSWORD，缺一个就抛 ValueError ——
+    那样连「打开登录页看一眼」都做不到，而且报错完全看不出是配置问题。
+    现在连接推迟到第一个请求，缺哪些变量直接写进错误信息里。
+    """
+
+    def __init__(self):
+        self._client: CsStoreAPI | None = None
+
+    def _connect(self) -> CsStoreAPI:
+        if self._client is None:
+            missing = [n for n in ('CS_SERVER_URL', 'CS_USER_ID', 'CS_PASSWORD') if not os.getenv(n)]
+            if missing:
+                raise RuntimeError(
+                    f'缺少配置 {", ".join(missing)}：请复制 .env.example 为 .env 并填写，'
+                    '同时确认平台服务（run_cs_agent）已启动'
+                )
+            self._client = create_cs_store_api(
+                url=os.getenv('CS_SERVER_URL'),
+                user_id=os.getenv('CS_USER_ID'),
+                password=os.getenv('CS_PASSWORD'),
+            )
+        return self._client
+
+    def __getattr__(self, name):
+        return getattr(self._connect(), name)
+
+
+# 各路由照旧按 `client.xxx()` 调用，连接与否由这个代理决定
+client = _LazyStoreClient()
 
 def login_required(f):
     """登录装饰器"""

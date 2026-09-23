@@ -19,7 +19,7 @@ def llm_profile_suggest(chat_history: ChatHistory, kf_chat_history: KFChatHistor
 
     logger.debug(f"prompt: {prompt}")
 
-    # 生成客户profile建议
+    # 生成客户画像建议
     generated_result: AIMessage = llm.invoke(prompt)
     logger.debug(f"generated_result: {generated_result}")
 
@@ -33,7 +33,7 @@ def llm_profile_suggest(chat_history: ChatHistory, kf_chat_history: KFChatHistor
         logger.info(f"generated_profile: {generated_profile.model_dump_json()}")
         return generated_profile
     except Exception as e:
-        logger.error(f"生成客户profile建议失败: {e}")
+        logger.error(f"生成客户画像建议失败: {e}")
         return CustomerProfile()
 
 
@@ -41,7 +41,7 @@ def llm_profile_suggest(chat_history: ChatHistory, kf_chat_history: KFChatHistor
 _profile_instructions = """
 你的任务是根据客户的相关信息，提取客户的profile信息：CustomerProfile。
 
-这里是客户profile信息CustomerProfile的数据结构定义：
+这里是客户画像信息CustomerProfile的数据结构定义：
 -------------------
 {schema_json}
 -------------------

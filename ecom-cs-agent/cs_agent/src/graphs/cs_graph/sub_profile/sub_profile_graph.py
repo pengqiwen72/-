@@ -14,7 +14,7 @@ builder.add_node(NodeName.PROFILE_NOTIFY_FEEDBACK.value, notify_human_feedback)
 builder.add_node(NodeName.PROFILE_NOTIFY_RESULT.value, notify_human_result)
 
 builder.add_edge(START, NodeName.WELCOME_MESSAGE.value) ## 欢迎消息节点
-builder.add_edge(NodeName.WELCOME_MESSAGE.value, NodeName.PROFILE_SUGGEST.value) ## 生成客户profile节点
+builder.add_edge(NodeName.WELCOME_MESSAGE.value, NodeName.PROFILE_SUGGEST.value) ## 生成客户画像节点
 builder.add_edge(NodeName.PROFILE_SUGGEST.value, NodeName.PROFILE_NOTIFY_FEEDBACK.value) ## 发送人工确认通知节点
 builder.add_edge(NodeName.PROFILE_NOTIFY_FEEDBACK.value, NodeName.PROFILE_FEEDBACK.value) ## 人工反馈节点
 ## 人工反馈节点，如果人工反馈为ok，则跳转到profile_update节点，如果人工反馈为discard，则跳转到end，如果人工反馈为recreate，则跳转到profile_suggest节点。

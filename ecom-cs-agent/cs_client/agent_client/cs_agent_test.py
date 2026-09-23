@@ -17,7 +17,7 @@ cs_user = os.getenv("CS_USER_ID")
 cs_user_password = os.getenv("CS_USER_PASSWORD")
 
 async def test():
-    """查看EcomCS Agent 的运行状态"""
+    """查看电商智能客服 Agent 的运行状态"""
     console = Console()
 
     # 创建客户端实例
@@ -25,9 +25,9 @@ async def test():
 
 
     console.print(Panel(
-        "🚀 EcomCS Agent 运行状态查看\n"
-        "这个演示将展示如何使用客户端连接服务器并查看EcomCS Agent 的运行状态",
-        title="欢迎使用 EcomCS Agent 运行状态查看",
+        "🚀 电商智能客服与运营助手 · 运行状态查看\n"
+        "这个演示将展示如何使用客户端连接服务器并查看电商智能客服 Agent 的运行状态",
+        title="欢迎使用电商智能客服与运营助手",
         border_style="blue"
     ))
     

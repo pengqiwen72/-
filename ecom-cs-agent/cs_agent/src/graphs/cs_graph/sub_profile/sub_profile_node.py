@@ -49,9 +49,9 @@ def welcome_message(state: SubProfileState, config: RunnableConfig):
 
 
 def generate_customer_profile(state: SubProfileState, config: RunnableConfig):
-    """生成客户Profile"""
+    """生成客户画像"""
     
-    logger.info("=== 生成客户profile ===")
+    logger.info("=== 生成客户画像 ===")
 
     try:
         generated_profile: CustomerProfile = llm_profile_suggest(
@@ -67,30 +67,30 @@ def generate_customer_profile(state: SubProfileState, config: RunnableConfig):
             SubProfileStateField.SUGGESTION_PROFILE: generated_profile,
             SubProfileStateField.NOTIFY_CONTENT: f"您好，我为您的客户生成了新的Profile，需要您的确认：\n{generated_profile.model_dump_json()}",
             SubProfileStateField.TASK_RESULT: TaskResult(
-                task_result=f"生成客户profile成功：\n{generated_profile.model_dump_json()}",
-                task_result_explain=f"生成客户profile成功",
+                task_result=f"生成客户画像成功：\n{generated_profile.model_dump_json()}",
+                task_result_explain=f"生成客户画像成功",
                 task_result_code=0
             ),
             SubProfileStateField.NODE_RESULT: [NodeResult(
                 execute_node_name=NodeName.PROFILE_SUGGEST.value,
                 execute_result_code=0,
-                execute_result_msg="生成客户profile成功，等待人工确认",
+                execute_result_msg="生成客户画像成功，等待人工确认",
                 execute_exceptions=[]
             )]
         }
     except Exception as e:
-        logger.error(f"生成客户profile失败: {e}")
+        logger.error(f"生成客户画像失败: {e}")
         return {
             SubProfileStateField.SUGGESTION_PROFILE: CustomerProfile(),
             SubProfileStateField.TASK_RESULT: TaskResult(
-                task_result=f"很抱歉，生成客户profile时，发生了错误",
-                task_result_explain=f"生成客户profile失败",
+                task_result=f"很抱歉，生成客户画像时，发生了错误",
+                task_result_explain=f"生成客户画像失败",
                 task_result_code=1
             ),
             SubProfileStateField.NODE_RESULT: [NodeResult(
                 execute_node_name=NodeName.PROFILE_SUGGEST.value,
                 execute_result_code=1,
-                execute_result_msg="生成客户profile失败",
+                execute_result_msg="生成客户画像失败",
                 execute_exceptions=[str(e)]
             )]
         }
@@ -159,7 +159,7 @@ def human_feedback(state: SubProfileState, config: RunnableConfig) -> Command[Li
     # {"confirmed": "recreate"}
 
     human_feedback = interrupt({
-        "description": "这是帮您生成的客户Profile，您可以确认、放弃、重新生成。",
+        "description": "这是帮您生成的客户画像，您可以确认、放弃、重新生成。",
         "old_profile": state.get(SubProfileStateField.CUSTOMER_PROFILE, {}),
         "new_profile": state.get(SubProfileStateField.SUGGESTION_PROFILE, {})
     })
@@ -257,9 +257,9 @@ def human_feedback(state: SubProfileState, config: RunnableConfig) -> Command[Li
 
 
 def update_customer_profile(state: SubProfileState, config: RunnableConfig):
-    """更新客户profile节点"""
+    """更新客户画像节点"""
     
-    logger.info("=== 更新客户profile ===")
+    logger.info("=== 更新客户画像 ===")
 
     follow_user_id = config[ConfigurableField.configurable][ConfigurableField.user_id]
     external_id = config[ConfigurableField.configurable][ConfigurableField.external_id]
@@ -268,16 +268,16 @@ def update_customer_profile(state: SubProfileState, config: RunnableConfig):
 
     if not external_id or not follow_user_id or task_result_code != 0:
         return {
-            SubProfileStateField.NOTIFY_CONTENT: f"缺少参数或任务结果不成功，无法更新客户profile",
+            SubProfileStateField.NOTIFY_CONTENT: f"缺少参数或任务结果不成功，无法更新客户画像",
             SubProfileStateField.TASK_RESULT: TaskResult(
-                task_result=f"缺少参数或任务结果不成功，无法更新客户profile",
-                task_result_explain=f"缺少参数或任务结果不成功，无法更新客户profile",
+                task_result=f"缺少参数或任务结果不成功，无法更新客户画像",
+                task_result_explain=f"缺少参数或任务结果不成功，无法更新客户画像",
                 task_result_code=1
             ),
             SubProfileStateField.NODE_RESULT: [NodeResult(
                 execute_node_name=NodeName.PROFILE_UPDATE.value,
                 execute_result_code=task_result_code,
-                execute_result_msg=f"缺少参数或任务结果不成功，无法更新客户profile",
+                execute_result_msg=f"缺少参数或任务结果不成功，无法更新客户画像",
                 execute_exceptions=[]
             )]
         }
@@ -287,35 +287,35 @@ def update_customer_profile(state: SubProfileState, config: RunnableConfig):
     try:
         profile = state.get(SubProfileStateField.SUGGESTION_PROFILE, CustomerProfile())
         update_customer_profile_tool(external_id = external_id, follow_user_id = follow_user_id, profile = profile)
-        logger.info(f"客户profile更新成功")
+        logger.info(f"客户画像更新成功")
         
         return {
-            SubProfileStateField.NOTIFY_CONTENT: f"更新客户profile成功：\n{profile.model_dump_json()}",
+            SubProfileStateField.NOTIFY_CONTENT: f"更新客户画像成功：\n{profile.model_dump_json()}",
             SubProfileStateField.TASK_RESULT: TaskResult(
-                task_result=f"更新客户profile成功：\n{profile.model_dump_json()}",
-                task_result_explain=f"更新客户profile成功",
+                task_result=f"更新客户画像成功：\n{profile.model_dump_json()}",
+                task_result_explain=f"更新客户画像成功",
                 task_result_code=0
             ),
             SubProfileStateField.NODE_RESULT: [NodeResult(
                 execute_node_name=NodeName.PROFILE_UPDATE.value,
                 execute_result_code=0,
-                execute_result_msg=f"更新客户profile成功",
+                execute_result_msg=f"更新客户画像成功",
                 execute_exceptions=[]
             )]
         }
     except Exception as e:
-        logger.error(f"更新客户profile失败: {e}")
+        logger.error(f"更新客户画像失败: {e}")
         return {
-            SubProfileStateField.NOTIFY_CONTENT: f"更新客户profile失败：\n{str(e)}",
+            SubProfileStateField.NOTIFY_CONTENT: f"更新客户画像失败：\n{str(e)}",
             SubProfileStateField.TASK_RESULT: TaskResult(
-                task_result=f"更新客户profile失败：\n{str(e)}",
-                task_result_explain=f"更新客户profile失败",
+                task_result=f"更新客户画像失败：\n{str(e)}",
+                task_result_explain=f"更新客户画像失败",
                 task_result_code=1
             ),
             SubProfileStateField.NODE_RESULT: [NodeResult(
                 execute_node_name=NodeName.PROFILE_UPDATE.value,
                 execute_result_code=1,
-                execute_result_msg=f"更新客户profile失败",
+                execute_result_msg=f"更新客户画像失败",
                 execute_exceptions=[str(e)]
             )] 
         }

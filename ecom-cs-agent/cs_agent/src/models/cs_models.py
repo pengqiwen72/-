@@ -435,9 +435,10 @@ class ReportAnomaly(CsBaseModel):
 class ReportNarrative(CsBaseModel):
     ''' 周报的**文字部分**（模型只负责这一块）
 
-    数值全部由 `sub_weekly_report` 用 pandas 算好，模型只把它们组织成人话。
-    这样切分的理由：同环比算错是**确定性错误**，写个断言就能发现；措辞好坏
-    无法自动校验。把模型的输出面收窄到「不涉及算术的那些字」，它就不可能算错 ——
+    数值全部由 `sub_weekly_report` 的 aggregate 节点用确定性代码算好，
+    模型只把它们组织成人话。这样切分的理由：同环比算错是**确定性错误**，
+    写个断言就能发现；措辞好坏无法自动校验。把模型的输出面收窄到
+    「不涉及算术的那些字」，它就不可能算错 ——
     控制幻觉最有效的办法不是提醒它别说错，而是让它没机会说错。
 
     生成的文字同样要过 `verify_no_new_numbers`：摘要里出现的每个数字都必须
@@ -464,7 +465,10 @@ class WeeklyReport(CsBaseModel):
     highlights: List[str] = Field(default_factory=list, description="值得关注的要点")
     summary: str = Field(default="", description="一段话总结")
     table: str = Field(default="", description="Markdown 表格，后台与终端直接渲染")
-    degraded: bool = Field(default=False, description="是否走了纯 Python 兜底路径（环境里没有 pandas）")
+    degraded: bool = Field(
+        default=False,
+        description="是否走了兜底：指标没算出来，或模型摘要未通过数字校验而回退为确定性转述",
+    )
 
     def render(self) -> str:
         lines = [f"【{self.period_start} ~ {self.period_end} 运营周报】"]

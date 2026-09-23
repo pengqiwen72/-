@@ -1,8 +1,12 @@
 #!/bin/bash
-echo "CS Admin Starting... "
+# 启动客服运营后台（Flask，默认 :5000）。
+#
+# ⚠️ 它读的是 LangGraph 平台里的 Store，所以**必须先起平台服务**：
+#     cs_agent/run_cs_agent        （langgraph dev，:2024）
+# 只想看效果的话不用跑这个：根目录 `python quickstart.py` 离线就能跑通全部链路。
+echo "cs-admin 启动中……"
 
 uv sync
 
 nohup uv run cs_admin_app.py >> cs_admin.log 2>&1 &
-
-echo "CS Admin Started"
+echo "已在后台启动，日志：cs_admin.log；端口 5000"

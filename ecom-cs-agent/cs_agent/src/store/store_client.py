@@ -143,7 +143,7 @@ class StoreClient:
 
     @debug
     def get_profile_by_external_id(self, external_id: str, follow_user_id: str) -> Dict[str, Any]:
-        """根据external_id获取客户profile"""
+        """根据external_id获取客户画像"""
 
         if not external_id or not follow_user_id:
             return {}
