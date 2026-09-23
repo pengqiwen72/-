@@ -46,6 +46,18 @@ def _force_utf8() -> None:
 # ==================== 场景定义 ====================
 
 SCENARIOS: dict[str, dict] = {
+    "qa": {
+        "title": "商品咨询问答",
+        "input": "product_qa",
+        "desc": "意图枚举直达商品咨询子图，问题取自客户最后一条消息；"
+                "回答带出处页脚，置信度不足则转人工。",
+    },
+    "qa_miss": {
+        "title": "商品咨询（知识库未覆盖）",
+        "input": "这款保温杯支持无线充电吗？",
+        "desc": "走语义意图识别进商品咨询子图；资料里没有「无线充电」，"
+                "诉求词无着落 → 转人工，而不是硬编一个答案。",
+    },
     "tag": {
         "title": "生成客户标签",
         "input": "给这个客户打个标签",
@@ -73,7 +85,7 @@ SCENARIOS: dict[str, dict] = {
     },
 }
 
-DEFAULT_ORDER = ["talk", "chat", "tag", "schedule", "profile"]
+DEFAULT_ORDER = ["talk", "qa", "qa_miss", "chat", "tag", "schedule", "profile"]
 
 
 # ==================== 输出 ====================
@@ -84,6 +96,8 @@ def _hr(char: str = "─", width: int = 68) -> str:
 
 def _print_events(events: list[dict]) -> None:
     """把进度事件渲染成一行行带缩进的阶段。"""
+    from observability.progress import STAGE_LABELS
+
     for ev in events:
         stage = ev.get("stage", "?")
         label = ev.get("label", STAGE_LABELS.get(stage, stage))
@@ -135,6 +149,15 @@ def _print_state_summary(state: dict) -> None:
         msg = getattr(task_result, "task_result", task_result)
         print(f"\n  最终结果：{msg}")
 
+    product_qa = state.get("product_qa")
+    if product_qa is not None:
+        print(f"\n  商品咨询：置信度 {product_qa.confidence:.2f}  "
+              f"状态 {product_qa.status}  出处 {len(product_qa.citations)} 条")
+        if product_qa.matched_terms:
+            print(f"  命中词：{'、'.join(product_qa.matched_terms)}")
+        if product_qa.reason:
+            print(f"  转人工原因：{product_qa.reason}")
+
     suggestion = state.get("suggestion_tag")
     if suggestion is not None:
         print(f"\n  标签建议：{suggestion.model_dump_json(indent=2)}")
@@ -175,7 +198,6 @@ def _ask_approval(interrupts: list, auto_yes: bool) -> str:
 def run_scenario(key: str, *, auto_yes: bool = False) -> int:
     """跑一个场景。返回退出码（0 成功）。"""
     from demo import DemoRunner, build_demo_graph
-    from observability.progress import STAGE_LABELS
 
     spec = SCENARIOS[key]
     print(f"\n{_hr('═')}")

@@ -19,6 +19,7 @@ class NodeName(str, Enum):
     TASK_RESULT_CONFIRM = "task_result_confirm"
 
     # 子图节点（意图识别后，根据意图调用对应的子图）
+    PRODUCT_QA          = "product_qa" ## 商品咨询问答（RAG）
     CHAT_SUGGESTION     = "chat_suggestion" ## 生成客户聊天建议
     KF_CHAT_SUGGESTION  = "kf_chat_suggestion" ## 生成客服聊天建议
     TAG_SUGGESTION      = "tag_suggestion" ## 生成客户标签
@@ -28,6 +29,7 @@ class NodeName(str, Enum):
 
 # 意图列表（意图识别后，根据意图调用对应的子图）
 class IntentDetection(str, Enum):
+    PRODUCT_QA          = NodeName.PRODUCT_QA.value
     CHAT_SUGGESTION     = NodeName.CHAT_SUGGESTION.value
     KF_CHAT_SUGGESTION  = NodeName.KF_CHAT_SUGGESTION.value
     TAG_SUGGESTION      = NodeName.TAG_SUGGESTION.value
@@ -58,6 +60,7 @@ def cleanup_state_node(state: CsState, config: RunnableConfig):
         CsStateField.SUGGESTION_KF: None,
         CsStateField.SUGGESTION_SCHEDULE: None,
         CsStateField.NOTIFY_CONTENT: None,
+        CsStateField.PRODUCT_QA: None,
     }
 
 def welcome_message(state: CsState, config: RunnableConfig):
@@ -80,6 +83,7 @@ def intent_detection(state: CsState, config: RunnableConfig) -> Command[Literal[
     logger.info("=== 意图检测 ===")
     
     intents=[
+        Intent(intent_id=IntentDetection.PRODUCT_QA.value, intent_description="客户在问商品参数、使用方法、售后政策、运费包邮等具体问题，需要基于商品知识库给出有依据的答复"),
         Intent(intent_id=IntentDetection.CHAT_SUGGESTION.value, intent_description="我是销售人员，正在和客户沟通，我需要知道如何回复比较合适"),
         Intent(intent_id=IntentDetection.KF_CHAT_SUGGESTION.value, intent_description="我是企业客服，在帮助客户解决问题，请帮助我生成客服回复建议"),
         Intent(intent_id=IntentDetection.TAG_SUGGESTION.value, intent_description="我的客户情况有更新，我需要更客户标签"),

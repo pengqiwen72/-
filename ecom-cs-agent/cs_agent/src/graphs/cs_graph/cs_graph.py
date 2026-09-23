@@ -1,6 +1,7 @@
 from langgraph.graph import START, END, StateGraph
 from graphs.cs_graph.cs_state import CsState, InputState, OutputState, CsConfig
 
+from graphs.cs_graph.sub_product_qa.sub_product_qa_graph import sub_product_qa_graph
 from graphs.cs_graph.sub_profile.sub_profile_graph import sub_profile_graph
 from graphs.cs_graph.sub_chat_suggestion.sub_chat_suggestion_graph import sub_chat_suggestion_graph
 from graphs.cs_graph.sub_kf_chat_suggestion.sub_kf_chat_suggestion_graph import sub_kf_chat_suggestion_graph
@@ -36,6 +37,7 @@ builder.add_node(LoadDataNodeName.LOAD_KF_CHAT_HISTORY.value, load_kf_chat_histo
 builder.add_node(LoadDataNodeName.LOAD_ORDER_HISTORY.value, load_order_history_node) ## 加载订单信息
 
 ## 生成建议节点
+builder.add_node(NodeName.PRODUCT_QA.value, sub_product_qa_graph) ## 商品咨询问答（RAG）
 builder.add_node(NodeName.CHAT_SUGGESTION.value, sub_chat_suggestion_graph) ## 生成客户聊天建议
 builder.add_node(NodeName.KF_CHAT_SUGGESTION.value, sub_kf_chat_suggestion_graph) ## 生成客服聊天建议
 builder.add_node(NodeName.TAG_SUGGESTION.value, sub_tag_graph) ## 生成客户标签
@@ -56,15 +58,17 @@ builder.add_edge(LoadDataNodeName.LOAD_KF_CHAT_HISTORY.value, LoadDataNodeName.L
 builder.add_edge(LoadDataNodeName.LOAD_ORDER_HISTORY.value, NodeName.INTENT_DETECTION.value)
 
 ## 意图检测后，根据意图调用对应的子图：
-## 1. 如果意图是客户聊天建议，则调用sub_chat_suggestion_graph
-## 2. 如果意图是客服聊天建议，则调用sub_kf_chat_suggestion_graph
-## 3. 如果意图是客户标签，则调用sub_tag_graph
-## 4. 如果意图是客户画像，则调用sub_profile_graph
-## 5. 如果意图是客户日程，则调用sub_schedule_graph
-## 6. 如果意图是未明确意图，则调用sub_talk_graph
+## 1. 如果意图是商品咨询，则调用sub_product_qa_graph
+## 2. 如果意图是客户聊天建议，则调用sub_chat_suggestion_graph
+## 3. 如果意图是客服聊天建议，则调用sub_kf_chat_suggestion_graph
+## 4. 如果意图是客户标签，则调用sub_tag_graph
+## 5. 如果意图是客户画像，则调用sub_profile_graph
+## 6. 如果意图是客户日程，则调用sub_schedule_graph
+## 7. 如果意图是未明确意图，则调用sub_talk_graph
 ## 子图执行完成后，调用NodeName.TASK_RESULT_CONFIRM节点
 
 
+builder.add_edge(NodeName.PRODUCT_QA.value,          NodeName.TASK_RESULT_CONFIRM.value)
 builder.add_edge(NodeName.CHAT_SUGGESTION.value,     NodeName.TASK_RESULT_CONFIRM.value)
 builder.add_edge(NodeName.KF_CHAT_SUGGESTION.value,  NodeName.TASK_RESULT_CONFIRM.value)
 builder.add_edge(NodeName.TAG_SUGGESTION.value,      NodeName.TASK_RESULT_CONFIRM.value)

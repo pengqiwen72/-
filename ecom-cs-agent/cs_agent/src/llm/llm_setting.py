@@ -24,4 +24,22 @@ def reset_chat_model():
     return chat_model
 
 
-__all__ = ["chat_model", "reset_chat_model", "OfflineChatModel", "get_chat_model", "is_offline"]
+def is_offline_model() -> bool:
+    """当前生效的模型是不是离线模型。
+
+    判断的是**实际实例**而不是 `LLM_MODE` 环境变量：填了 live 但缺
+    MODEL_PROVIDER / MODEL_NAME 时会自动回落离线，此时环境变量说 live、
+    真实跑的是离线，只看环境变量会得出相反的结论。也不走
+    `llm_provider.is_offline()`——那个每次调用都重新构造一遍模型。
+    """
+    return isinstance(chat_model, OfflineChatModel)
+
+
+__all__ = [
+    "chat_model",
+    "reset_chat_model",
+    "is_offline_model",
+    "OfflineChatModel",
+    "get_chat_model",
+    "is_offline",
+]

@@ -68,33 +68,42 @@ class CustomerProfile(CsBaseModel):
 
     @classmethod
     def get_example_instance(cls):
+        """示例实例 = 画像的**字段口径基准**。
+
+        25 个条目分四组：基础属性（1-6）、消费特征（7-13）、偏好（14-17）、
+        服务敏感度（18-22）。这个列表同时被两处消费：
+          * `get_example_json()` 注入提示词，作为模型输出时的字段参考；
+          * 离线合成器 `synthesize_profile` 以它为骨架，只填有证据的项。
+        改这里等于改画像口径，两处会同步生效。
+        """
         return cls(
             profile_items=[
-                ProfileItem(item_name="家长姓名", item_value="李女士"),
-                ProfileItem(item_name="家长年龄", item_value="38"),
-                ProfileItem(item_name="家长性别", item_value="女"),
-                ProfileItem(item_name="家长职业", item_value="企业行政"),
-                ProfileItem(item_name="家长兴趣爱好", item_value="育儿交流、阅读、健身"),
-                ProfileItem(item_name="婚姻状况", item_value="已婚"),
-                ProfileItem(item_name="家长教育程度", item_value="本科"),
-                ProfileItem(item_name="学生学段年级", item_value="小学六年级"),
-                ProfileItem(item_name="学生性别", item_value="男"),
-                ProfileItem(item_name="学生学习情况", item_value="成绩中等，数学偏薄弱"),
-                ProfileItem(item_name="薄弱学科", item_value="数学"),
-                ProfileItem(item_name="优势学科", item_value="语文、英语"),
-                ProfileItem(item_name="学习目标", item_value="冲刺重点初中"),
-                ProfileItem(item_name="报课类型偏好", item_value="全科培优、小升初冲刺班"),
-                ProfileItem(item_name="上课形式偏好", item_value="线下面授"),
-                ProfileItem(item_name="上课时间偏好", item_value="周末白天、寒暑假集训"),
-                ProfileItem(item_name="购课消费频率", item_value="按学期持续购课、常年续费"),
-                ProfileItem(item_name="单次购课大致金额", item_value="3000-5000元"),
-                ProfileItem(item_name="教辅资料采购习惯", item_value="按需购买，优先选购真题试卷"),
-                ProfileItem(item_name="购课/购资料渠道", item_value="线下门店、企业微信、线上小程序"),
-                ProfileItem(item_name="家庭成员", item_value="三口之家，独生子，无老人同住"),
-                ProfileItem(item_name="家长育儿状态", item_value="双职工，晚间陪伴学习"),
-                ProfileItem(item_name="家校沟通频率", item_value="沟通较频繁"),
-                ProfileItem(item_name="服务关注点", item_value="师资水平、学情报告、课后答疑、课时预留"),
-                ProfileItem(item_name="课程续费意愿", item_value="续费意愿强烈")
+                # ---- 基础属性 ----
+                ProfileItem(item_name="客户姓名", item_value="李女士"),
+                ProfileItem(item_name="客户性别", item_value="女"),
+                ProfileItem(item_name="年龄段", item_value="30-35 岁"),
+                ProfileItem(item_name="所在城市", item_value="浙江省杭州市西湖区"),
+                ProfileItem(item_name="职业", item_value="互联网公司产品经理"),
+                ProfileItem(item_name="家庭成员", item_value="已婚，育有一子（小学三年级）"),
+                # ---- 消费特征 ----
+                ProfileItem(item_name="消费能力", item_value="中高，注重品质而非低价"),
+                ProfileItem(item_name="客单价区间", item_value="200-600 元"),
+                ProfileItem(item_name="购买频次", item_value="月均 2-3 单，大促期间集中下单"),
+                ProfileItem(item_name="累计消费金额", item_value="约 4800 元"),
+                ProfileItem(item_name="下单渠道", item_value="企业微信私聊、小程序商城"),
+                ProfileItem(item_name="支付方式偏好", item_value="微信支付"),
+                ProfileItem(item_name="常用收货地址", item_value="杭州市西湖区文三路（工作地址，工作日全天可收）"),
+                # ---- 偏好 ----
+                ProfileItem(item_name="品类偏好", item_value="家居日用、数码配件、杯壶"),
+                ProfileItem(item_name="品牌倾向", item_value="偏好有明确质保承诺的品牌，不排斥新品牌"),
+                ProfileItem(item_name="价格敏感度", item_value="中等偏低，更看重售后保障与发货时效"),
+                ProfileItem(item_name="促销参与度", item_value="对满减与赠品敏感，大促期间下单集中"),
+                # ---- 服务敏感度 ----
+                ProfileItem(item_name="退换货倾向", item_value="较低，非必要不退货；出现质量问题会明确主张权益"),
+                ProfileItem(item_name="历史售后记录", item_value="近 30 天 1 次：电热毯控制器失灵，已全额退款"),
+                ProfileItem(item_name="对售后时效要求", item_value="高，期望 24 小时内给出明确处理结论"),
+                ProfileItem(item_name="沟通风格", item_value="直接、目标明确，不喜欢反复确认"),
+                ProfileItem(item_name="关注点", item_value="发货时效、质保范围、破损赔付流程"),
             ]
         )
 
@@ -167,6 +176,88 @@ class JustTalkOutput(CsBaseModel):
         return cls(
             just_talk_output="输出应答内容"
         )
+
+
+#####  商品咨询问答（RAG）  #####
+
+class ProductQACitation(CsBaseModel):
+    ''' 商品问答出处 '''
+    index: int = Field(default=0, description="出处编号，与回答正文里的【出处N】对应")
+    doc_title: str = Field(default="", description="出处文档标题")
+    section: str = Field(default="", description="出处章节路径")
+    source: str = Field(default="", description="出处文件相对路径")
+    snippet: str = Field(default="", description="出处原文片段")
+    score: float = Field(default=0.0, description="重排相关度，[0,1)")
+
+    def render(self) -> str:
+        from utils.text import citation_path
+
+        located = citation_path(self.doc_title, self.section)
+        return (
+            f"【出处{self.index}】{located}"
+            f"（{self.source}，相关度 {self.score:.2f}）\n    {self.snippet}"
+        )
+
+
+class ProductQA(CsBaseModel):
+    ''' 商品咨询问答结果
+
+    ⚠️ 这里刻意**不直接复用** `rag.types.RagAnswer`：那个是 dataclass，只服务于
+    进程内的检索链路。而问答结果要写进 LangGraph 状态、随检查点序列化、
+    并被 webapp 的接口层直接 `model_dump()` 出去 —— 跨进程边界的数据必须是
+    pydantic 模型，否则反序列化时拿到的是一个裸 dict，下游 `getattr` 全失效。
+    两个模型之间用 `from_rag_answer()` 单向转换，字段一一对应。
+    '''
+
+    question: str = Field(default="", description="客户原始问题")
+    answer: str = Field(default="", description="回答正文")
+    confidence: float = Field(default=0.0, description="置信度，[0,1]")
+    status: str = Field(default="answered", description="answered: 已作答；handoff: 转人工")
+    reason: str = Field(default="", description="转人工原因；正常作答时为空")
+    citations: List[ProductQACitation] = Field(default_factory=list, description="出处列表")
+    matched_terms: List[str] = Field(default_factory=list, description="命中的实词，用于解释这次靠什么命中")
+    degraded: bool = Field(default=False, description="是否发生过降级（模型输出被数字校验拦下、回退为事实转述）")
+
+    @classmethod
+    def from_rag_answer(cls, question: str, rag_answer) -> "ProductQA":
+        """把 `rag.types.RagAnswer` 转成可入状态的模型。"""
+        return cls(
+            question=question,
+            answer=rag_answer.answer,
+            confidence=round(float(rag_answer.confidence), 4),
+            status=rag_answer.status,
+            reason=rag_answer.reason,
+            citations=[
+                ProductQACitation(
+                    index=c.index,
+                    doc_title=c.title,
+                    section=c.section,
+                    source=c.source,
+                    snippet=c.snippet,
+                    score=round(float(c.score), 4),
+                )
+                for c in rag_answer.citations
+            ],
+            matched_terms=list(rag_answer.matched_terms),
+            degraded=bool(rag_answer.degraded),
+        )
+
+    @property
+    def is_handoff(self) -> bool:
+        return self.status == "handoff"
+
+    def citation_footer(self) -> str:
+        if not self.citations:
+            return ""
+        return "参考资料：\n" + "\n".join(c.render() for c in self.citations)
+
+    def render(self) -> str:
+        """正文 + 出处页脚，给人看的完整回答。"""
+        parts = [self.answer.strip()]
+        footer = self.citation_footer()
+        if footer:
+            parts.append(footer)
+        return "\n\n".join(p for p in parts if p)
 
 
 #####  意图检测  #####
