@@ -1,0 +1,50 @@
+{
+  "_comment": "物流轨迹。traces 以 order_id 为键；nodes 时间同样用相对偏移。status 取值：已揽收/运输中/派送中/已签收/异常。",
+  "traces": [
+    {
+      "order_id": "SO20260318002",
+      "carrier": "顺丰速运",
+      "tracking_no": "SF1234567890123",
+      "status": "派送中",
+      "nodes": [
+        { "days_ago": 2, "at": "19:20", "status": "已揽收", "desc": "快件已在【深圳宝安集散点】揽收" },
+        { "days_ago": 1, "at": "08:15", "status": "运输中", "desc": "快件已发往【杭州转运中心】" },
+        { "hours_ago": 14, "status": "运输中", "desc": "快件已到达【杭州转运中心】" },
+        { "hours_ago": 5, "status": "派送中", "desc": "快递员【张师傅 138****4412】正在派送，请保持电话畅通" }
+      ]
+    },
+    {
+      "order_id": "SO20260315001",
+      "carrier": "中通快递",
+      "tracking_no": "ZT7788990011223",
+      "status": "已签收",
+      "nodes": [
+        { "days_ago": 9, "at": "16:40", "status": "已揽收", "desc": "快件已在【上海松江网点】揽收" },
+        { "days_ago": 8, "at": "07:30", "status": "运输中", "desc": "快件已发往【杭州转运中心】" },
+        { "days_ago": 7, "at": "09:05", "status": "派送中", "desc": "快递员【李师傅 138****9087】正在派送" },
+        { "days_ago": 7, "at": "14:22", "status": "已签收", "desc": "快件已由【本人】签收，感谢使用中通快递" }
+      ]
+    },
+    {
+      "order_id": "SO20260319003",
+      "carrier": "京东物流",
+      "tracking_no": "JD5566778899001",
+      "status": "已揽收",
+      "nodes": [
+        { "hours_ago": 9, "status": "已揽收", "desc": "商品已出库，【京东物流】已揽收" }
+      ]
+    },
+    {
+      "order_id": "SO20260320008",
+      "carrier": "顺丰速运",
+      "tracking_no": "SF9988776655443",
+      "status": "已签收",
+      "nodes": [
+        { "days_ago": 3, "at": "11:00", "status": "已揽收", "desc": "快件已在【北京亦庄集散点】揽收" },
+        { "days_ago": 2, "at": "06:50", "status": "运输中", "desc": "快件已发往【南京转运中心】" },
+        { "days_ago": 1, "at": "10:30", "status": "派送中", "desc": "快递员【王师傅 138****7721】正在派送" },
+        { "days_ago": 1, "at": "15:48", "status": "已签收", "desc": "快件已签收，签收人：本人" }
+      ]
+    }
+  ]
+}

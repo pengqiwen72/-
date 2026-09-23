@@ -1,0 +1,15 @@
+{
+  "python_version": "3.12",
+  "dependencies": [".","./src"],
+  "graphs": {
+    "cs": "./src/graphs/cs_graph/cs_graph.py:graph"
+  },
+  "env": ".env",
+  "http": {
+    "app": "./src/webapp/webapp.py:app"
+  },
+  "auth": {
+    "path": "./src/auth/auth.py:auth"
+  },
+  "image_distro": "wolfi" 
+}

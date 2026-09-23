@@ -1,0 +1,170 @@
+{
+  "_comment": [
+    "售后政策规则库。由 integrations/policy.py 做结构化匹配：",
+    "  同一规则内所有 conditions 之间是 AND；规则之间按 priority 从大到小取首个命中；",
+    "  命中的每条条件都会写进 reason_trace，让「为什么给出这个方案」可解释、可追溯。",
+    "条件字段词表：",
+    "  reason_keywords  售后原因文本里必须命中的关键词（命中任意一个即可）",
+    "  min_amount / max_amount  订单实付金额区间（含端点）",
+    "  within_days      签收后多少天内（含）",
+    "  order_status     订单状态码白名单",
+    "  sku_not_in       排除的商品（如定制款不支持无理由）",
+    "  is_customized    是否定制商品",
+    "动作字段：",
+    "  action.type      auto_refund 自动退款 / return_refund 退货退款 / exchange 换货 /",
+    "                   compensate 补偿 / reject 拒绝 / handoff 转人工",
+    "  need_approval    是否需要人工审批（高金额走 HITL）"
+  ],
+  "policies": [
+    {
+      "policy_id": "POL-REJECT-DUPLICATE",
+      "priority": 200,
+      "title": "重复售后申请",
+      "conditions": {
+        "order_status": ["600", "700"]
+      },
+      "action": {
+        "type": "reject",
+        "refund_type": "不受理",
+        "need_approval": false,
+        "sla": "即时"
+      },
+      "reason_template": "该订单已处于售后退款流程中或已完成退款，不能重复申请。"
+    },
+    {
+      "policy_id": "POL-HANDOFF-EXPIRED",
+      "priority": 190,
+      "title": "超出售后时效",
+      "conditions": {
+        "min_days": 30
+      },
+      "action": {
+        "type": "handoff",
+        "refund_type": "转人工评估",
+        "need_approval": false,
+        "sla": "1 个工作日内联系"
+      },
+      "reason_template": "订单已签收超过 30 天，超出标准售后时效，需人工评估是否符合特殊处理条件。"
+    },
+    {
+      "policy_id": "POL-REFUND-BROKEN-HIGH",
+      "priority": 180,
+      "title": "破损包赔（高金额，需审批）",
+      "conditions": {
+        "reason_keywords": ["破损", "损坏", "摔", "裂", "碎", "压坏", "变形"],
+        "min_amount": 500,
+        "within_days": 7,
+        "order_status": ["300", "400"]
+      },
+      "action": {
+        "type": "auto_refund",
+        "refund_type": "全额退款",
+        "need_approval": true,
+        "sla": "审批通过后 24 小时内到账"
+      },
+      "reason_template": "商品运输破损，签收 7 天内且金额达到 {amount} 元，符合破损包赔政策；因单笔超过 500 元，需人工审批后执行。"
+    },
+    {
+      "policy_id": "POL-REFUND-BROKEN",
+      "priority": 170,
+      "title": "破损包赔（自动退款）",
+      "conditions": {
+        "reason_keywords": ["破损", "损坏", "摔", "裂", "碎", "压坏", "变形"],
+        "max_amount": 499.99,
+        "within_days": 7,
+        "order_status": ["300", "400"]
+      },
+      "action": {
+        "type": "auto_refund",
+        "refund_type": "全额退款",
+        "need_approval": false,
+        "sla": "24 小时内到账"
+      },
+      "reason_template": "商品运输破损，签收 7 天内且金额为 {amount} 元，符合破损包赔政策，已自动发起全额退款。"
+    },
+    {
+      "policy_id": "POL-EXCHANGE-QUALITY",
+      "priority": 160,
+      "title": "质量问题换货",
+      "conditions": {
+        "reason_keywords": ["质量", "故障", "失灵", "不能用", "不工作", "坏了", "异响", "充不进电"],
+        "within_days": 30,
+        "order_status": ["400"]
+      },
+      "action": {
+        "type": "exchange",
+        "refund_type": "免费换新",
+        "need_approval": false,
+        "sla": "换货商品 48 小时内发出，往返运费由店铺承担"
+      },
+      "reason_template": "商品存在质量问题且在 30 天质保期内，符合质量换货政策，将为您免费换新。"
+    },
+    {
+      "policy_id": "POL-REFUND-NO-REASON-CUSTOM",
+      "priority": 150,
+      "title": "定制商品不支持无理由退货",
+      "conditions": {
+        "reason_keywords": ["不想要", "无理由", "不喜欢", "买错", "多买", "不想要了"],
+        "is_customized": true,
+        "within_days": 7,
+        "order_status": ["300", "400"]
+      },
+      "action": {
+        "type": "reject",
+        "refund_type": "不受理",
+        "need_approval": false,
+        "sla": "即时",
+        "alternative": "可协助转售或提供 30 元无门槛优惠券作为补偿"
+      },
+      "reason_template": "该商品为激光刻字定制款，按店铺政策定制商品不支持七天无理由退货。{alternative}"
+    },
+    {
+      "policy_id": "POL-REFUND-NO-REASON",
+      "priority": 140,
+      "title": "七天无理由退货",
+      "conditions": {
+        "reason_keywords": ["不想要", "无理由", "不喜欢", "买错", "多买", "不想要了", "七天无理由"],
+        "is_customized": false,
+        "within_days": 7,
+        "order_status": ["300", "400"]
+      },
+      "action": {
+        "type": "return_refund",
+        "refund_type": "退货退款",
+        "need_approval": false,
+        "sla": "收到退货并验收无误后 48 小时内退款，退回运费由买家承担"
+      },
+      "reason_template": "订单在签收 7 天内且非定制商品，符合七天无理由退货政策。请保持商品不影响二次销售，退回运费需自理。"
+    },
+    {
+      "policy_id": "POL-COMPENSATE-LOGISTICS",
+      "priority": 130,
+      "title": "物流超时补偿",
+      "conditions": {
+        "reason_keywords": ["太慢", "还没到", "超时", "延误", "多久到", "催"],
+        "order_status": ["200", "300"],
+        "min_days": 5
+      },
+      "action": {
+        "type": "compensate",
+        "refund_type": "补偿优惠券",
+        "need_approval": false,
+        "sla": "优惠券即时到账，有效期 30 天"
+      },
+      "reason_template": "订单已付款超过 5 天仍未签收，符合物流超时补偿政策，将发放 20 元无门槛优惠券。"
+    },
+    {
+      "policy_id": "POL-HANDOFF-FALLBACK",
+      "priority": 10,
+      "title": "兜底转人工",
+      "conditions": {},
+      "action": {
+        "type": "handoff",
+        "refund_type": "转人工评估",
+        "need_approval": false,
+        "sla": "1 个工作日内联系"
+      },
+      "reason_template": "当前诉求未匹配到可自动处理的售后政策，已为您转接人工客服进一步核实。"
+    }
+  ]
+}

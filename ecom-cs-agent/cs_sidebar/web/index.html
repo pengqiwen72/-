@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能客服工作台</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="main-body">
+    <div class="app-container">
+        <!-- 头部 -->
+        <div class="header">
+            <h1>智能客服工作台</h1>
+            <button class="logout-btn" id="logoutBtn">退出</button>
+        </div>
+        
+        <!-- 内容区域 -->
+        <div class="content-area">
+            <!-- 显示区域 -->
+            <div class="display-area" id="displayArea">
+                <div class="welcome-message">
+                    <p>您好！我是电商智能客服助手</p>
+                    <p>请选择下方菜单或输入您的问题。</p>
+                </div>
+            </div>
+            
+            <!-- 进度状态区域 -->
+            <div class="progress-area" id="progressArea" style="display: none;">
+                <div class="progress-content">
+                    <span class="progress-icon">⚡</span>
+                    <span class="progress-text" id="progressText">正在处理中...</span>
+                </div>
+            </div>
+            
+            <!-- 当前任务结果区域 -->
+            <div class="current-task-area" id="currentTaskArea" style="display: none;">
+                <div class="task-header">
+                    <span class="task-icon">🎯</span>
+                    <span class="task-title">当前任务结果</span>
+                </div>
+                <div class="task-content" id="currentTaskContent">
+                    <!-- 任务结果内容会动态更新 -->
+                </div>
+            </div>
+            
+            <!-- 中断确认区域 -->
+            <div class="interrupt-area" id="interruptArea" style="display: none;">
+                <div class="interrupt-content">
+                    <h3>需要您的确认</h3>
+                    <p id="interruptDescription"></p>
+                    <div class="interrupt-buttons">
+                        <button class="confirm-btn ok" data-action="ok">确认</button>
+                        <button class="confirm-btn discard" data-action="discard">放弃</button>
+                        <button class="confirm-btn recreate" data-action="recreate">重新生成</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 输入区域 -->
+        <div class="input-area">
+            <div class="input-container">
+                <input type="text" id="messageInput" placeholder="请输入您的问题..." disabled>
+                <button id="sendBtn" class="send-btn" disabled>发送</button>
+            </div>
+        </div>
+        
+        <!-- 底部菜单 -->
+        <div class="bottom-menu">
+            <button class="menu-item" data-menu="profile_suggestion">
+                <span class="menu-icon">👤</span>
+                <span class="menu-text">客户画像</span>
+            </button>
+            <button class="menu-item" data-menu="tag_suggestion">
+                <span class="menu-icon">🏷️</span>
+                <span class="menu-text">客户标签</span>
+            </button>
+            <button class="menu-item" data-menu="chat_suggestion">
+                <span class="menu-icon">💬</span>
+                <span class="menu-text">聊天建议</span>
+            </button>
+            <button class="menu-item" data-menu="kf_chat_suggestion">
+                <span class="menu-icon">🎧</span>
+                <span class="menu-text">客服建议</span>
+            </button>
+            <button class="menu-item" data-menu="schedule_suggestion">
+                <span class="menu-icon">📅</span>
+                <span class="menu-text">日程建议</span>
+            </button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

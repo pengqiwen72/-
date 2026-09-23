@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}客户订单列表 - 智能客服运营后台{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-shopping-cart"></i> 客户订单列表
+                    <small class="text-muted">（Union ID: {{ union_id }}）</small>
+                </h5>
+                <a href="javascript:history.back()" class="btn btn-back">
+                    <i class="fas fa-arrow-left"></i> 返回
+                </a>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>订单ID</th>
+                                <th>订单状态</th>
+                                <th>下单时间</th>
+                                <th>商品名称</th>
+                                <th>订单金额</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orderTableBody">
+                            <tr>
+                                <td colspan="6" class="text-center">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">加载中...</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 订单详情模态框 -->
+<div class="modal fade" id="orderDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">订单详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="orderDetailContent">
+                    <!-- 订单详情内容将在这里显示 -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    const unionId = '{{ union_id }}';
+    let currentOrders = [];
+    
+    // 加载订单列表
+    function loadOrders() {
+        $.get('/api/customer_orders/' + unionId)
+            .done(function(response) {
+                if (response.success) {
+                    currentOrders = response.data;
+                    renderOrderTable(response.data);
+                } else {
+                    showAlert('加载订单列表失败: ' + response.error, 'danger');
+                }
+            })
+            .fail(function() {
+                showAlert('网络错误，请稍后重试', 'danger');
+            });
+    }
+    
+    // 渲染订单表格
+    function renderOrderTable(orders) {
+        const tbody = $('#orderTableBody');
+        tbody.empty();
+        
+        if (orders.length === 0) {
+            tbody.append('<tr><td colspan="7" class="text-center text-muted">该客户暂无订单数据</td></tr>');
+            return;
+        }
+        
+        orders.forEach(function(order) {
+            const statusBadge = getStatusBadge(order.order_status);
+            const orderDate = formatOrderCreateTime(order.order_create_time);
+            const orderProductsStr = formatOrderProducts(order.order_products);
+            
+            const row = `
+                <tr>
+                    <td><code>${order.order_id}</code></td>
+                    <td>${statusBadge}</td>
+                    <td>${orderDate}</td>
+                    <td>${orderProductsStr}</td>
+                    <td><strong>¥${(order.order_price || 0).toFixed(2)}</strong></td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-info" onclick="viewOrderDetail('${order.order_id}')">
+                            <i class="fas fa-eye"></i> 查看详情
+                        </button>
+                    </td>
+                </tr>
+            `;
+            tbody.append(row);
+        });
+    }
+    
+    // 获取订单状态徽章
+    function getStatusBadge(status) {
+        const statusMap = {
+            '已完成': 'success',
+            '已付款': 'primary',
+            '待付款': 'warning',
+            '已取消': 'danger',
+            '退款中': 'info',
+            '已退款': 'secondary'
+        };
+        
+        const badgeClass = statusMap[status] || 'secondary';
+        return `<span class="badge bg-${badgeClass}">${status || '未知'}</span>`;
+    }
+    
+    // 格式化订单创建时间（时间戳转换为年月日时分秒）
+    function formatOrderCreateTime(timestamp) {
+        if (!timestamp) return '-';
+        
+        try {
+            const date = new Date(timestamp * 1000); // 时间戳转换为毫秒
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        } catch (e) {
+            return timestamp.toString();
+        }
+    }
+    
+    // 格式化订单商品（数组转换为带换行的字符串）
+    function formatOrderProducts(products) {
+        if (!products || !Array.isArray(products)) return '-';
+        
+        if (products.length === 0) return '-';
+        
+        // 将数组元素用<br>连接，形成带换行的字符串
+        return products.join('<br>');
+    }
+    
+    // 查看订单详情
+    window.viewOrderDetail = function(orderId) {
+        const order = currentOrders.find(o => o.order_id === orderId);
+        if (!order) {
+            showAlert('订单信息不存在', 'warning');
+            return;
+        }
+        
+        const detailHtml = `
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>基本信息</h6>
+                    <dl class="row">
+                        <dt class="col-sm-4">订单ID:</dt>
+                        <dd class="col-sm-8"><code>${order.order_id}</code></dd>
+                        <dt class="col-sm-4">Union ID:</dt>
+                        <dd class="col-sm-8"><code>${order.union_id}</code></dd>
+                        <dt class="col-sm-4">订单状态:</dt>
+                        <dd class="col-sm-8">${getStatusBadge(order.order_status)}</dd>
+                        <dt class="col-sm-4">商品名称:</dt>
+                        <dd class="col-sm-8">${formatOrderProducts(order.order_products)}</dd>
+                        <dt class="col-sm-4">订单金额:</dt>
+                        <dd class="col-sm-8"><strong>¥${(order.order_price || 0).toFixed(2)}</strong></dd>
+                        <dt class="col-sm-4">下单时间:</dt>
+                        <dd class="col-sm-8">${formatOrderCreateTime(order.order_create_time)}</dd>
+                    </dl>
+                </div>
+            </div>
+            
+            <div class="mt-4">
+                <h6>原始数据</h6>
+                <pre class="bg-light p-3 rounded"><code>${JSON.stringify(order.order_raw_info || {}, null, 2)}</code></pre>
+            </div>
+        `;
+        
+        $('#orderDetailContent').html(detailHtml);
+        $('#orderDetailModal').modal('show');
+    };
+    
+    // 显示提示信息
+    function showAlert(message, type) {
+        const alert = `
+            <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        $('.container-fluid').prepend(alert);
+    }
+    
+    // 初始加载
+    loadOrders();
+});
+</script>
+{% endblock %} 

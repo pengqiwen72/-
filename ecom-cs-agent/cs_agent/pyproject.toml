@@ -1,0 +1,27 @@
+[project]
+name = "cs-agent"
+version = "0.1.0"
+description = "cs_用户画像 agent智能体系统"
+requires-python = "==3.12.*"
+dependencies = [
+    "fastapi==0.125.0",
+    "langchain==1.2.0",
+    "langchain-community==0.4.1",
+    "langchain-core==1.2.3",
+    "langchain-openai==1.1.6",
+    "langfuse==3.11.0",
+    "langgraph==1.0.5",
+    "langgraph-api==0.6.9",
+    "langgraph-cli==0.4.11",
+    "langgraph-runtime-inmem==0.20.1",
+    "langgraph-sdk==0.3.1",
+    "python-dotenv==1.2.1",
+    "pytz==2025.2",
+    "requests==2.32.5",
+    "starlette==0.50.0",
+    "typing-extensions==4.15.0",
+    "uvicorn==0.38.0",
+]
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true

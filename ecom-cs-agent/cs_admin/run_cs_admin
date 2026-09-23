@@ -1,0 +1,8 @@
+#!/bin/bash
+echo "CS Admin Starting... "
+
+uv sync
+
+nohup uv run cs_admin_app.py >> cs_admin.log 2>&1 &
+
+echo "CS Admin Started"

@@ -1,0 +1,7 @@
+#!/bin/bash
+echo "cs Agent Starting... "
+
+uv sync
+
+nohup uv run langgraph dev --host 0.0.0.0 --port 2024 >> cs_agent.log 2>&1 &
+

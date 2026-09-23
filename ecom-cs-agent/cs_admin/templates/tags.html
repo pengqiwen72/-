@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}标签体系 - 智能客服运营后台{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-tags"></i> 标签体系
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="tagsContainer">
+                    <div class="text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    // 加载标签体系
+    function loadTags() {
+        $.get('/api/tags')
+            .done(function(response) {
+                if (response.success) {
+                    renderTags(response.data);
+                } else {
+                    showAlert('加载标签体系失败: ' + response.error, 'danger');
+                }
+            })
+            .fail(function() {
+                showAlert('网络错误，请稍后重试', 'danger');
+            });
+    }
+    
+    // 渲染标签体系
+    function renderTags(tags) {
+        const container = $('#tagsContainer');
+        container.empty();
+        
+        if (tags.length === 0) {
+            container.append('<div class="text-center text-muted">暂无标签数据</div>');
+            return;
+        }
+        
+        // 按策略和组分组
+        const grouped = {};
+        tags.forEach(function(tag) {
+            const strategyId = (tag.strategy_id !== undefined && tag.strategy_id !== null) ? tag.strategy_id : 'unknown';
+            const groupId = tag.group_id || 'unknown';
+            
+            if (!grouped[strategyId]) {
+                grouped[strategyId] = {};
+            }
+            if (!grouped[strategyId][groupId]) {
+                grouped[strategyId][groupId] = [];
+            }
+            grouped[strategyId][groupId].push(tag);
+        });
+        
+        // 渲染分组后的标签
+        // 按strategy_id排序，strategy_id=0排在顶部
+        const sortedStrategyIds = Object.keys(grouped).sort(function(a, b) {
+            // 处理unknown的情况
+            if (a === 'unknown' && b !== 'unknown') return 1;
+            if (b === 'unknown' && a !== 'unknown') return -1;
+            if (a === 'unknown' && b === 'unknown') return 0;
+            
+            const numA = parseInt(a);
+            const numB = parseInt(b);
+            
+            // strategy_id=0排在最前面
+            if (numA === 0 && numB !== 0) return -1;
+            if (numB === 0 && numA !== 0) return 1;
+            
+            return numA - numB;
+        });
+        
+        sortedStrategyIds.forEach(function(strategyId) {
+            // 显示策略名称
+            const strategyIdNum = parseInt(strategyId);
+            const strategyName = (strategyIdNum === 0) ? '企业标签' : `策略: ${strategyId}`;
+            const strategyCard = `
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h6 class="mb-0">${strategyName}</h6>
+                    </div>
+                    <div class="card-body" id="strategy-${strategyId}">
+                    </div>
+                </div>
+            `;
+            container.append(strategyCard);
+            
+            const strategyContainer = $(`#strategy-${strategyId}`);
+            
+            Object.keys(grouped[strategyId]).forEach(function(groupId) {
+                // 获取组名，优先使用group_name，fallback到group_id
+                const firstTag = grouped[strategyId][groupId][0];
+                const groupName = firstTag.group_name || groupId;
+                
+                const groupHtml = `
+                    <div class="mb-3">
+                        <h6 class="text-primary">组: ${groupName}</h6>
+                        <div class="row" id="group-${strategyId}-${groupId}">
+                        </div>
+                    </div>
+                `;
+                strategyContainer.append(groupHtml);
+                
+                const groupContainer = $(`#group-${strategyId}-${groupId}`);
+                
+                grouped[strategyId][groupId].forEach(function(tag) {
+                    const tagCard = `
+                        <div class="col-md-6 col-lg-4 mb-2">
+                            <div class="card card-body">
+                                <h6 class="card-title">${tag.tag_name}</h6>
+                                <p class="card-text">
+                                    <small class="text-muted">
+                                        ID: ${tag.tag_id}
+                                    </small>
+                                </p>
+                            </div>
+                        </div>
+                    `;
+                    groupContainer.append(tagCard);
+                });
+            });
+        });
+        
+        // 添加原始JSON数据展示
+        const jsonCard = `
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h6 class="mb-0">原始JSON数据</h6>
+                </div>
+                <div class="card-body">
+                    <pre class="bg-light p-3 rounded"><code>${JSON.stringify(tags, null, 2)}</code></pre>
+                </div>
+            </div>
+        `;
+        container.append(jsonCard);
+    }
+    
+    // 显示提示信息
+    function showAlert(message, type) {
+        const alert = `
+            <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        $('.container-fluid').prepend(alert);
+    }
+    
+    // 初始加载
+    loadTags();
+});
+</script>
+{% endblock %} 
