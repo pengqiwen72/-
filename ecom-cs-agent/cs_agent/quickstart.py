@@ -58,6 +58,44 @@ SCENARIOS: dict[str, dict] = {
         "desc": "走语义意图识别进商品咨询子图；资料里没有「无线充电」，"
                 "诉求词无着落 → 转人工，而不是硬编一个答案。",
     },
+    "order": {
+        "title": "订单联合查询",
+        "input": "帮我查一下订单 SO20260318002 到哪了",
+        "desc": "订单/物流/库存三路接口并行调用，逐条打印字段归一映射"
+                "（orderNo→order_id、分→元、毫秒时间戳→日期、嵌套地址扁平化）。",
+    },
+    "order_degraded": {
+        "title": "订单查询（物流接口故障）",
+        "input": "帮我查一下订单 SO20260318002 到哪了",
+        "desc": "注入物流接口故障，验证「部分失败不整体失败」："
+                "订单与库存照常返回，缺的那一路记进 degraded 并如实告知客户。",
+        "env": {"MOCK_FAIL_ACTIONS": "logistics"},
+    },
+    "aftersale": {
+        "title": "售后处理（低金额自动退款）",
+        "input": "订单 SO20260315001 的保温杯杯盖密封圈破损了，我要退款",
+        "desc": "政策引擎按「全条件 AND + 优先级」匹配规则库，命中破损包赔；"
+                "金额低于审批线直接执行，并打印每条条件的判定依据。",
+    },
+    "aftersale_replay": {
+        "title": "售后重复提交（幂等）",
+        "input": "订单 SO20260315001 的保温杯杯盖密封圈破损了，我要退款",
+        "desc": "同一诉求提交两次：第二次命中幂等记录后短路返回首次结果，"
+                "不会产生第二个退款单号。",
+        "repeat": 2,
+    },
+    "aftersale_approval": {
+        "title": "售后处理（高金额人工审批）",
+        "input": "订单 SO20260320008 的落地灯灯臂磕碰了，我要退货退款",
+        "desc": "599 元越过审批线 → interrupt 等人工作出决定 → 批准后由独立的执行节点"
+                "发起退款；中断节点本身无副作用，所以重放不会重复退款。",
+    },
+    "report": {
+        "title": "运营数据周报",
+        "input": "给我出一份本周的运营数据周报",
+        "desc": "取数 → 算数 → 说话 三段分离：指标与同环比由确定性代码算，"
+                "模型只写摘要，且摘要里出现的每个数字都必须能在指标表里找到。",
+    },
     "tag": {
         "title": "生成客户标签",
         "input": "给这个客户打个标签",
@@ -85,7 +123,13 @@ SCENARIOS: dict[str, dict] = {
     },
 }
 
-DEFAULT_ORDER = ["talk", "qa", "qa_miss", "chat", "tag", "schedule", "profile"]
+DEFAULT_ORDER = [
+    "talk", "qa", "qa_miss",
+    "order", "order_degraded",
+    "aftersale", "aftersale_replay", "aftersale_approval",
+    "report",
+    "chat", "tag", "schedule", "profile",
+]
 
 
 # ==================== 输出 ====================
@@ -158,6 +202,53 @@ def _print_state_summary(state: dict) -> None:
         if product_qa.reason:
             print(f"  转人工原因：{product_qa.reason}")
 
+    order_query = state.get("order_query")
+    if order_query is not None:
+        print(f"\n  订单查询：{order_query.order_id or '—'}  {order_query.status_text or '—'}  "
+              f"实付 {order_query.pay_amount:.2f} 元")
+        if order_query.logistics is not None:
+            trace = order_query.logistics
+            print(f"  物流：{trace.carrier} {trace.tracking_no}  {trace.status}")
+        if order_query.stocks:
+            for stock in order_query.stocks:
+                print(f"  库存：{stock.render()}")
+        if order_query.degraded:
+            print(f"  ⚠ 降级：{'；'.join(order_query.degraded)}")
+        if order_query.normalize_trace:
+            print("  归一轨迹：")
+            for line in order_query.normalize_trace:
+                print(f"    {line}")
+
+    plan = state.get("after_sale")
+    if plan is not None:
+        print(f"\n  售后方案：{plan.plan_id or '—'}  政策 {plan.policy_id or '—'}（{plan.policy_title or '—'}）")
+        print(f"  动作：{plan.action_type} / {plan.refund_type}  "
+              f"金额 {plan.amount:.2f} 元  状态 {plan.status}"
+              f"{'  审批人 ' + plan.approved_by if plan.approved_by else ''}")
+        if plan.refund_id:
+            print(f"  退款单号：{plan.refund_id}"
+                  f"{'（命中幂等，未重复发起）' if plan.replayed else ''}")
+        if plan.reason_trace:
+            # 标记已由节点写进字符串，这里原样打印——见 sub_after_sale_node._build_plan
+            print("  判定依据：")
+            for line in plan.reason_trace:
+                print(f"    {line}")
+        if plan.reason:
+            print(f"  方案说明：{plan.reason}")
+
+    report = state.get("weekly_report")
+    if report is not None:
+        print(f"\n  数据周报（{report.period_start} ~ {report.period_end}）"
+              f"{'  ⚠ 已降级' if report.degraded else ''}：")
+        for line in (report.table or "").splitlines():
+            print(f"    {line}")
+        for anomaly in report.anomalies:
+            print(f"    {anomaly.render()}")
+        if report.summary:
+            print(f"  摘要：{report.summary}")
+        for highlight in report.highlights:
+            print(f"    · {highlight}")
+
     suggestion = state.get("suggestion_tag")
     if suggestion is not None:
         print(f"\n  标签建议：{suggestion.model_dump_json(indent=2)}")
@@ -173,6 +264,12 @@ def _ask_approval(interrupts: list, auto_yes: bool) -> str:
     if isinstance(payload, dict):
         desc = payload.get("description", "需要你确认")
         print(f"\n  ⏸  等待人工审批：{desc}")
+        if payload.get("type") == "after_sale_approval":
+            print(f"      方案 {payload.get('plan_id')}  "
+                  f"{payload.get('refund_type')} {payload.get('amount')} 元")
+            # reason_trace 的条目自带 ✓/✗ 前缀，这里不再补一层
+            for line in (payload.get("reason_trace") or []):
+                print(f"      {line}")
         for key in ("old_tags", "new_tags", "old_profile", "new_profile"):
             if payload.get(key):
                 print(f"      {key}: {payload[key]}")
@@ -195,42 +292,84 @@ def _ask_approval(interrupts: list, auto_yes: bool) -> str:
 
 # ==================== 场景执行 ====================
 
+class _scenario_env:
+    """临时覆盖环境变量（场景级的故障注入用），退出时还原。
+
+    端口实例是进程级单例、不会重建，但故障注入是在**每次调用时**读环境变量的
+    （见 `integrations/mock/chaos.py`），所以场景级覆盖是生效的。
+    """
+
+    def __init__(self, overrides: dict):
+        self.overrides = overrides or {}
+        self.saved: dict = {}
+
+    def __enter__(self):
+        for name, value in self.overrides.items():
+            self.saved[name] = os.environ.get(name)
+            os.environ[name] = value
+        return self
+
+    def __exit__(self, *exc):
+        for name, old in self.saved.items():
+            if old is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = old
+        return False
+
+
 def run_scenario(key: str, *, auto_yes: bool = False) -> int:
     """跑一个场景。返回退出码（0 成功）。"""
     from demo import DemoRunner, build_demo_graph
 
     spec = SCENARIOS[key]
+    repeat = int(spec.get("repeat", 1))
     print(f"\n{_hr('═')}")
     print(f"  场景：{spec['title']}  [{key}]")
     print(f"  输入：{spec['input']!r}")
     print(f"  说明：{spec['desc']}")
+    if spec.get("env"):
+        print(f"  注入：{spec['env']}")
+    if repeat > 1:
+        print(f"  重复：同一诉求提交 {repeat} 次（用来验证幂等短路）")
     print(_hr("═"))
 
-    runner = DemoRunner(build_demo_graph())
-    result = runner.start(spec["input"])
+    # 整个场景（含审批恢复）都跑在注入的环境里：中断-恢复之间故障不该消失，
+    # 否则「审批通过后接口恢复了」会让降级分支看起来像是假的
+    with _scenario_env(spec.get("env", {})):
+        # 跑多次时共用同一个 runner/图：幂等记录写在 store 里，
+        # 换一个图实例就换一个 store，短路也就无从谈起了
+        runner = DemoRunner(build_demo_graph())
 
-    print("\n  执行过程：")
-    _print_progress(result)
+        for index in range(1, repeat + 1):
+            if repeat > 1:
+                print(f"\n  ── 第 {index} 次提交 ──")
 
-    # 最多处理 3 轮审批，避免「重新生成」无限循环
-    rounds = 0
-    while result.interrupted and rounds < 3:
-        rounds += 1
-        decision = _ask_approval(result.interrupts, auto_yes)
-        result = runner.resume(result.thread_id, decision)
-        print("\n  审批后过程：")
-        _print_progress(result)
+            result = runner.start(spec["input"])
 
-    if result.error:
-        print(f"\n  ✗ 执行出错：{result.error}")
-        return 1
+            print("\n  执行过程：")
+            _print_progress(result)
 
-    if result.interrupted:
-        print("\n  ⚠ 审批轮次用尽，图仍处于中断状态")
-        return 1
+            # 最多处理 3 轮审批，避免「重新生成」无限循环
+            rounds = 0
+            while result.interrupted and rounds < 3:
+                rounds += 1
+                decision = _ask_approval(result.interrupts, auto_yes)
+                result = runner.resume(result.thread_id, decision)
+                print("\n  审批后过程：")
+                _print_progress(result)
 
-    _print_state_summary(result.state)
-    print(f"\n  线程：{result.thread_id}")
+            if result.error:
+                print(f"\n  ✗ 执行出错：{result.error}")
+                return 1
+
+            if result.interrupted:
+                print("\n  ⚠ 审批轮次用尽，图仍处于中断状态")
+                return 1
+
+            _print_state_summary(result.state)
+            print(f"\n  线程：{result.thread_id}")
+
     return 0
 
 

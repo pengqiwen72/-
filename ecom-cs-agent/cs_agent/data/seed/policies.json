@@ -51,7 +51,7 @@
       "priority": 180,
       "title": "破损包赔（高金额，需审批）",
       "conditions": {
-        "reason_keywords": ["破损", "损坏", "摔", "裂", "碎", "压坏", "变形"],
+        "reason_keywords": ["破损", "损坏", "磕碰", "磕", "摔", "裂", "碎", "压坏", "变形", "凹陷"],
         "min_amount": 500,
         "within_days": 7,
         "order_status": ["300", "400"]
@@ -69,7 +69,7 @@
       "priority": 170,
       "title": "破损包赔（自动退款）",
       "conditions": {
-        "reason_keywords": ["破损", "损坏", "摔", "裂", "碎", "压坏", "变形"],
+        "reason_keywords": ["破损", "损坏", "磕碰", "磕", "摔", "裂", "碎", "压坏", "变形", "凹陷"],
         "max_amount": 499.99,
         "within_days": 7,
         "order_status": ["300", "400"]

@@ -13,7 +13,7 @@
       "customer_name": "李女士",
       "status_code": 400,
       "status_text": "已签收",
-      "days_ago": 9,
+      "days_ago": 6,
       "items": [
         { "sku_id": "SKU-BT500", "product_name": "轻量智能保温杯 PRO 500ml", "quantity": 1, "unit_price": 199.0 }
       ],
@@ -199,6 +199,54 @@
         "detail": "中山北路 某某小区 5 栋 802"
       },
       "remark": "灯臂运输中磕碰，申请换货"
+    },
+    {
+      "order_id": "SO20260317009",
+      "union_id": "union_ext_003",
+      "customer_name": "陈女士",
+      "status_code": 300,
+      "status_text": "已发货",
+      "days_ago": 6,
+      "items": [
+        { "sku_id": "SKU-TS300", "product_name": "恒温电热毯 双人款 1.8m", "quantity": 1, "unit_price": 489.0 }
+      ],
+      "total_amount": 489.0,
+      "pay_amount": 489.0,
+      "shipping_fee": 0.0,
+      "warehouse": "华北仓",
+      "receiver": {
+        "name": "陈女士",
+        "phone": "137****9045",
+        "province": "广东省",
+        "city": "深圳市",
+        "district": "南山区",
+        "detail": "科苑路 某某科技园 3 栋 505"
+      },
+      "remark": "客户催过一次发货"
+    },
+    {
+      "order_id": "SO20260319010",
+      "union_id": "union_ext_003",
+      "customer_name": "陈女士",
+      "status_code": 700,
+      "status_text": "已退款",
+      "days_ago": 4,
+      "items": [
+        { "sku_id": "SKU-BT500", "product_name": "轻量智能保温杯 PRO 500ml", "quantity": 1, "unit_price": 289.0 }
+      ],
+      "total_amount": 289.0,
+      "pay_amount": 289.0,
+      "shipping_fee": 0.0,
+      "warehouse": "华东仓",
+      "receiver": {
+        "name": "陈女士",
+        "phone": "137****9045",
+        "province": "广东省",
+        "city": "深圳市",
+        "district": "南山区",
+        "detail": "科苑路 某某科技园 3 栋 505"
+      },
+      "remark": "客户下单后 1 小时取消，已全额退款"
     }
   ]
 }

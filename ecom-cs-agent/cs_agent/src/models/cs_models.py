@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
 from models.cs_base_model import CsBaseModel
@@ -258,6 +258,224 @@ class ProductQA(CsBaseModel):
         if footer:
             parts.append(footer)
         return "\n\n".join(p for p in parts if p)
+
+
+#####  订单查询（多 API 编排）  #####
+
+class OrderItemInfo(CsBaseModel):
+    ''' 订单商品行 '''
+    sku_id: str = Field(default="", description="商品 SKU 编号")
+    product_name: str = Field(default="", description="商品名称")
+    quantity: int = Field(default=0, description="购买数量")
+    unit_price: float = Field(default=0.0, description="单价（元）")
+
+    def render(self) -> str:
+        return f"{self.product_name}（{self.sku_id}）×{self.quantity}"
+
+
+class LogisticsNode(CsBaseModel):
+    ''' 物流轨迹节点 '''
+    time: str = Field(default="", description="节点时间 yyyy-MM-dd HH:mm:ss")
+    status: str = Field(default="", description="节点状态")
+    desc: str = Field(default="", description="节点描述")
+
+
+class LogisticsTrace(CsBaseModel):
+    ''' 物流轨迹 '''
+    carrier: str = Field(default="", description="承运商")
+    tracking_no: str = Field(default="", description="运单号")
+    status: str = Field(default="", description="当前状态")
+    nodes: List[LogisticsNode] = Field(default_factory=list, description="轨迹节点，按时间正序")
+
+
+class StockInfo(CsBaseModel):
+    ''' 库存 '''
+    sku_id: str = Field(default="", description="商品 SKU 编号")
+    warehouse: str = Field(default="", description="仓库")
+    available: int = Field(default=0, description="可售数量")
+    restock_eta: str = Field(default="", description="补货预计，缺货时才有")
+
+    @property
+    def in_stock(self) -> bool:
+        return self.available > 0
+
+    def render(self) -> str:
+        if self.in_stock:
+            return f"{self.sku_id}@{self.warehouse}：可售 {self.available} 件"
+        eta = f"，{self.restock_eta}" if self.restock_eta else ""
+        return f"{self.sku_id}@{self.warehouse}：缺货{eta}"
+
+
+class OrderQueryResult(CsBaseModel):
+    ''' 订单联合查询结果（订单主数据 + 物流轨迹 + 库存）
+
+    一次查询要打三个业务系统，任何一个都可能超时或没有数据。设计上刻意
+    **不把「缺一路」当成整体失败**：订单主数据拿到了就先答，缺的部分记进
+    `degraded` 并如实告诉客户「物流信息暂时没取到」，而不是整条链路报错。
+    少答一部分永远好过什么都不答。
+    '''
+
+    order_id: str = Field(default="", description="订单号（归一层已统一格式）")
+    status_code: str = Field(default="", description="订单状态码，内部口径 100~700")
+    status_text: str = Field(default="", description="订单状态文案")
+    customer_name: str = Field(default="", description="客户姓名")
+    pay_amount: float = Field(default=0.0, description="实付金额（元）")
+    shipping_fee: float = Field(default=0.0, description="运费（元）")
+    warehouse: str = Field(default="", description="发货仓")
+    created_at: str = Field(default="", description="下单时间 yyyy-MM-dd HH:mm:ss")
+    receiver: str = Field(default="", description="收货信息（嵌套地址已扁平化、手机号已脱敏）")
+    items: List[OrderItemInfo] = Field(default_factory=list, description="商品明细")
+    logistics: Optional[LogisticsTrace] = Field(default=None, description="物流轨迹；没取到为 None")
+    stocks: List[StockInfo] = Field(default_factory=list, description="库存；没取到为空列表")
+    degraded: List[str] = Field(default_factory=list, description="降级说明：哪一路没取到、为什么")
+    normalize_trace: List[str] = Field(default_factory=list, description="字段归一轨迹，逐条列出上游字段与标准字段的差异")
+    summary: str = Field(default="", description="给人看的一句话结论")
+    candidates: List[str] = Field(default_factory=list, description="客户名下有多个订单时，可选的订单号（用于反问澄清）")
+
+    def render(self) -> str:
+        """把结构化结果渲染成客服可读的答复。"""
+        parts: List[str] = [
+            f"订单 {self.order_id}（{self.customer_name}）当前状态：{self.status_text}",
+            f"商品：{'；'.join(i.render() for i in self.items) or '—'}",
+            f"实付 {self.pay_amount:.2f} 元（含运费 {self.shipping_fee:.2f} 元），下单时间 {self.created_at}",
+        ]
+
+        if self.logistics is not None:
+            trace = self.logistics
+            parts.append(f"物流：{trace.carrier} {trace.tracking_no}，当前 {trace.status}")
+            for node in trace.nodes[-2:]:
+                parts.append(f"  {node.time} {node.desc}")
+
+        if self.stocks:
+            parts.append("库存：" + "；".join(s.render() for s in self.stocks[:2]))
+
+        if self.degraded:
+            parts.append("（" + "；".join(self.degraded) + "）")
+
+        return "\n".join(p for p in parts if p)
+
+
+#####  售后处理（政策引擎 + HITL + 幂等）  #####
+
+class AfterSalePlan(CsBaseModel):
+    ''' 售后处理方案
+
+    `plan_id` 由 `order_id + action_type` 确定性生成（uuid5），不随调用次数变化 ——
+    这是整个幂等链路的锚点：重放、重试、多轮审批都指向同一个 plan_id，
+    下游据此判断「这一单我是不是已经处理过了」。
+    '''
+
+    plan_id: str = Field(default="", description="方案 ID，order_id+action_type 确定性生成")
+    order_id: str = Field(default="", description="订单号")
+    action_type: str = Field(default="", description="auto_refund / return_refund / exchange / compensate / reject / handoff")
+    refund_type: str = Field(default="", description="处理方式的中文说法")
+    policy_id: str = Field(default="", description="命中的政策编号")
+    policy_title: str = Field(default="", description="命中的政策标题")
+    priority: int = Field(default=0, description="命中政策的优先级")
+    amount: float = Field(default=0.0, description="涉及金额（元）")
+    need_approval: bool = Field(default=False, description="是否需要人工审批")
+    sla: str = Field(default="", description="时效承诺")
+    reason: str = Field(default="", description="渲染后的处理依据（给客户看的话术）")
+    reason_trace: List[str] = Field(default_factory=list, description="逐条列出哪个条件被什么值命中，解释「为什么是这个结论」")
+    status: str = Field(default="matched", description="matched: 已定方案；pending_approval: 等审批；approved/rejected: 审批结论；executed: 已执行；replayed: 幂等重放；conflict: 幂等冲突")
+    approved_by: str = Field(default="", description="审批人")
+    refund_id: str = Field(default="", description="退款单号；未执行时为空")
+    replayed: bool = Field(default=False, description="是否命中了幂等（本次没有真的再发一次退款）")
+    message: str = Field(default="", description="给客户/坐席的一句话结论")
+
+    @property
+    def is_handoff(self) -> bool:
+        return self.action_type == "handoff"
+
+    @property
+    def is_reject(self) -> bool:
+        return self.action_type == "reject"
+
+    def render(self) -> str:
+        head = f"【{self.policy_title}】{self.message}"
+        lines = [head, self.reason]
+        if self.sla:
+            lines.append(f"时效：{self.sla}")
+        if self.refund_id:
+            lines.append(f"退款单号：{self.refund_id}")
+        return "\n".join(p for p in lines if p)
+
+
+#####  数据周报  #####
+
+class ReportMetric(CsBaseModel):
+    ''' 周报指标 '''
+    name: str = Field(default="", description="指标名")
+    current: float = Field(default=0.0, description="本周值")
+    previous: float = Field(default=0.0, description="上周值")
+    delta: float = Field(default=0.0, description="环比增量")
+    delta_pct: Optional[float] = Field(default=None, description="环比百分比；基数为 0 时为 None，避免出现「+∞%」")
+    unit: str = Field(default="", description="单位")
+
+    def render(self) -> str:
+        if self.delta_pct is None:
+            trend = "（上周无数据）"
+        else:
+            arrow = "↑" if self.delta_pct > 0 else ("↓" if self.delta_pct < 0 else "→")
+            trend = f"{arrow} {abs(self.delta_pct):.1f}%"
+        return f"{self.name}：{self.current:g}{self.unit}（上周 {self.previous:g}{self.unit}，{trend}）"
+
+
+class ReportAnomaly(CsBaseModel):
+    ''' 周报异常提示 '''
+    metric: str = Field(default="", description="相关指标")
+    level: str = Field(default="info", description="warn / info")
+    detail: str = Field(default="", description="异常说明")
+
+    def render(self) -> str:
+        mark = "⚠" if self.level == "warn" else "·"
+        return f"{mark} {self.detail}"
+
+
+class ReportNarrative(CsBaseModel):
+    ''' 周报的**文字部分**（模型只负责这一块）
+
+    数值全部由 `sub_weekly_report` 用 pandas 算好，模型只把它们组织成人话。
+    这样切分的理由：同环比算错是**确定性错误**，写个断言就能发现；措辞好坏
+    无法自动校验。把模型的输出面收窄到「不涉及算术的那些字」，它就不可能算错 ——
+    控制幻觉最有效的办法不是提醒它别说错，而是让它没机会说错。
+
+    生成的文字同样要过 `verify_no_new_numbers`：摘要里出现的每个数字都必须
+    能在指标表里找到。模型因此可以自由遣词，但不能凭空造一个「增长 3 倍」。
+    '''
+
+    summary: str = Field(default="", description="一段话总结本周运营情况")
+    highlights: List[str] = Field(default_factory=list, description="值得关注的要点，每条一句话")
+
+    @classmethod
+    def get_example_instance(cls):
+        return cls(
+            summary="本周共成交 4 单，成交金额 1700.00 元，较上周上升。",
+            highlights=["退款率 0.0%，处于健康区间", "在途订单 1 单，需关注物流时效"],
+        )
+
+
+class WeeklyReport(CsBaseModel):
+    ''' 运营数据周报 '''
+    period_start: str = Field(default="", description="统计周期起 yyyy-MM-dd")
+    period_end: str = Field(default="", description="统计周期止 yyyy-MM-dd")
+    metrics: List[ReportMetric] = Field(default_factory=list, description="核心指标及环比")
+    anomalies: List[ReportAnomaly] = Field(default_factory=list, description="异常提示")
+    highlights: List[str] = Field(default_factory=list, description="值得关注的要点")
+    summary: str = Field(default="", description="一段话总结")
+    table: str = Field(default="", description="Markdown 表格，后台与终端直接渲染")
+    degraded: bool = Field(default=False, description="是否走了纯 Python 兜底路径（环境里没有 pandas）")
+
+    def render(self) -> str:
+        lines = [f"【{self.period_start} ~ {self.period_end} 运营周报】"]
+        if self.table:
+            lines.append(self.table)
+        if self.anomalies:
+            lines.append("异常提示：")
+            lines.extend("  " + a.render() for a in self.anomalies)
+        if self.summary:
+            lines.append(self.summary)
+        return "\n".join(lines)
 
 
 #####  意图检测  #####

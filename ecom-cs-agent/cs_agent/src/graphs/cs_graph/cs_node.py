@@ -20,6 +20,9 @@ class NodeName(str, Enum):
 
     # 子图节点（意图识别后，根据意图调用对应的子图）
     PRODUCT_QA          = "product_qa" ## 商品咨询问答（RAG）
+    ORDER_QUERY         = "order_query" ## 订单查询（多 API 编排）
+    AFTER_SALE          = "after_sale" ## 售后处理（政策引擎 + HITL + 幂等）
+    WEEKLY_REPORT       = "weekly_report" ## 运营数据周报
     CHAT_SUGGESTION     = "chat_suggestion" ## 生成客户聊天建议
     KF_CHAT_SUGGESTION  = "kf_chat_suggestion" ## 生成客服聊天建议
     TAG_SUGGESTION      = "tag_suggestion" ## 生成客户标签
@@ -30,6 +33,9 @@ class NodeName(str, Enum):
 # 意图列表（意图识别后，根据意图调用对应的子图）
 class IntentDetection(str, Enum):
     PRODUCT_QA          = NodeName.PRODUCT_QA.value
+    ORDER_QUERY         = NodeName.ORDER_QUERY.value
+    AFTER_SALE          = NodeName.AFTER_SALE.value
+    WEEKLY_REPORT       = NodeName.WEEKLY_REPORT.value
     CHAT_SUGGESTION     = NodeName.CHAT_SUGGESTION.value
     KF_CHAT_SUGGESTION  = NodeName.KF_CHAT_SUGGESTION.value
     TAG_SUGGESTION      = NodeName.TAG_SUGGESTION.value
@@ -61,6 +67,9 @@ def cleanup_state_node(state: CsState, config: RunnableConfig):
         CsStateField.SUGGESTION_SCHEDULE: None,
         CsStateField.NOTIFY_CONTENT: None,
         CsStateField.PRODUCT_QA: None,
+        CsStateField.ORDER_QUERY: None,
+        CsStateField.AFTER_SALE: None,
+        CsStateField.WEEKLY_REPORT: None,
     }
 
 def welcome_message(state: CsState, config: RunnableConfig):
@@ -84,6 +93,9 @@ def intent_detection(state: CsState, config: RunnableConfig) -> Command[Literal[
     
     intents=[
         Intent(intent_id=IntentDetection.PRODUCT_QA.value, intent_description="客户在问商品参数、使用方法、售后政策、运费包邮等具体问题，需要基于商品知识库给出有依据的答复"),
+        Intent(intent_id=IntentDetection.ORDER_QUERY.value, intent_description="需要查询订单状态、物流到哪了、什么时候能到、某个商品还有没有库存"),
+        Intent(intent_id=IntentDetection.AFTER_SALE.value, intent_description="客户要申请退款、退货、换货，反馈商品破损或有质量问题，需要按售后政策处理"),
+        Intent(intent_id=IntentDetection.WEEKLY_REPORT.value, intent_description="需要一份运营数据统计：周报、订单量/成交额/退款率等指标的同环比"),
         Intent(intent_id=IntentDetection.CHAT_SUGGESTION.value, intent_description="我是销售人员，正在和客户沟通，我需要知道如何回复比较合适"),
         Intent(intent_id=IntentDetection.KF_CHAT_SUGGESTION.value, intent_description="我是企业客服，在帮助客户解决问题，请帮助我生成客服回复建议"),
         Intent(intent_id=IntentDetection.TAG_SUGGESTION.value, intent_description="我的客户情况有更新，我需要更客户标签"),

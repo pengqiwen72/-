@@ -43,6 +43,15 @@ class OrderPort(Protocol):
 
     def list_orders_by_customer(self, customer_id: str, limit: int = 20) -> List[dict]: ...
 
+    def list_orders_by_range(self, start: str, end: str, limit: int = 500) -> List[dict]:
+        """按下单时间区间拉订单，`start` / `end` 是 `yyyy-MM-dd`。
+
+        单笔查询和区间查询在真实系统里是两个接口（一个走订单详情、一个走
+        报表库），所以在这里也分成两个方法，而不是给 `get_order` 加一堆可选参数 ——
+        报表查询的数据源、权限、超时都跟详情查询不一样。
+        """
+        ...
+
 
 @runtime_checkable
 class LogisticsPort(Protocol):

@@ -6,13 +6,17 @@
 
 默认 mock 是刻意的：让 `git clone` 之后不配任何东西就能跑，
 也让 demo 永远不会因为外部系统抖动而失败。
+
+七路端口（通知 / 日程 / 订单 / 物流 / 库存 / 退款 / 工单）共用一张配置表，
+新增一路只需要在 `_PORT_TABLE` 里加一行 —— 逐个抄一遍构造逻辑，
+是新增端口时最容易漏改其中一处的地方。
 """
 
 from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Optional
+from typing import Tuple
 
 from utils.agent_logger import get_logger
 
@@ -59,7 +63,84 @@ def get_schedule_port():
     return MockSchedulePort()
 
 
+# ==================== 订单 / 物流 / 库存 / 退款 / 工单 ====================
+
+#: 动作名 -> (中文标签, http 实现类名, mock 模块名, mock 实现类名)
+_PORT_TABLE: dict[str, Tuple[str, str, str, str]] = {
+    "order":     ("订单", "HttpOrderPort",     "order_mock",      "MockOrderPort"),
+    "logistics": ("物流", "HttpLogisticsPort", "logistics_mock",  "MockLogisticsPort"),
+    "inventory": ("库存", "HttpInventoryPort", "inventory_mock",  "MockInventoryPort"),
+    "refund":    ("退款", "HttpRefundPort",    "after_sale_mock", "MockRefundPort"),
+    "handoff":   ("工单", "HttpHandoffPort",   "after_sale_mock", "MockHandoffPort"),
+}
+
+
+def _business_port(action: str):
+    """按 INTEGRATION_MODE 构造一个业务端口。"""
+    label, http_cls, mock_module, mock_cls = _PORT_TABLE[action]
+
+    if _use_http():
+        from integrations.http import business_http
+
+        logger.info(f"{label}端口：http（真实业务系统）")
+        return getattr(business_http, http_cls)()
+
+    from integrations.mock import (
+        after_sale_mock,
+        inventory_mock,
+        logistics_mock,
+        order_mock,
+    )
+
+    logger.debug(f"{label}端口：mock（读种子数据，零网络）")
+    modules = {
+        "order_mock": order_mock,
+        "logistics_mock": logistics_mock,
+        "inventory_mock": inventory_mock,
+        "after_sale_mock": after_sale_mock,
+    }
+    return getattr(modules[mock_module], mock_cls)()
+
+
+@lru_cache(maxsize=1)
+def get_order_port():
+    """获取订单主数据端口（进程级单例）。"""
+    return _business_port("order")
+
+
+@lru_cache(maxsize=1)
+def get_logistics_port():
+    """获取物流轨迹端口（进程级单例）。"""
+    return _business_port("logistics")
+
+
+@lru_cache(maxsize=1)
+def get_inventory_port():
+    """获取库存端口（进程级单例）。"""
+    return _business_port("inventory")
+
+
+@lru_cache(maxsize=1)
+def get_refund_port():
+    """获取退款端口（进程级单例）。"""
+    return _business_port("refund")
+
+
+@lru_cache(maxsize=1)
+def get_handoff_port():
+    """获取转人工工单端口（进程级单例）。"""
+    return _business_port("handoff")
+
+
 def reset_ports() -> None:
     """清空端口缓存（测试用）。"""
-    get_notify_port.cache_clear()
-    get_schedule_port.cache_clear()
+    for getter in (
+        get_notify_port,
+        get_schedule_port,
+        get_order_port,
+        get_logistics_port,
+        get_inventory_port,
+        get_refund_port,
+        get_handoff_port,
+    ):
+        getter.cache_clear()

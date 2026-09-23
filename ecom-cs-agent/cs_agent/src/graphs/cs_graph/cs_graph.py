@@ -2,6 +2,9 @@ from langgraph.graph import START, END, StateGraph
 from graphs.cs_graph.cs_state import CsState, InputState, OutputState, CsConfig
 
 from graphs.cs_graph.sub_product_qa.sub_product_qa_graph import sub_product_qa_graph
+from graphs.cs_graph.sub_order_query.sub_order_query_graph import sub_order_query_graph
+from graphs.cs_graph.sub_after_sale.sub_after_sale_graph import sub_after_sale_graph
+from graphs.cs_graph.sub_weekly_report.sub_weekly_report_graph import sub_weekly_report_graph
 from graphs.cs_graph.sub_profile.sub_profile_graph import sub_profile_graph
 from graphs.cs_graph.sub_chat_suggestion.sub_chat_suggestion_graph import sub_chat_suggestion_graph
 from graphs.cs_graph.sub_kf_chat_suggestion.sub_kf_chat_suggestion_graph import sub_kf_chat_suggestion_graph
@@ -38,6 +41,9 @@ builder.add_node(LoadDataNodeName.LOAD_ORDER_HISTORY.value, load_order_history_n
 
 ## 生成建议节点
 builder.add_node(NodeName.PRODUCT_QA.value, sub_product_qa_graph) ## 商品咨询问答（RAG）
+builder.add_node(NodeName.ORDER_QUERY.value, sub_order_query_graph) ## 订单查询（多 API 编排）
+builder.add_node(NodeName.AFTER_SALE.value, sub_after_sale_graph) ## 售后处理（政策匹配 + HITL 审批 + 幂等）
+builder.add_node(NodeName.WEEKLY_REPORT.value, sub_weekly_report_graph) ## 数据周报（确定性算数 + 模型只写摘要）
 builder.add_node(NodeName.CHAT_SUGGESTION.value, sub_chat_suggestion_graph) ## 生成客户聊天建议
 builder.add_node(NodeName.KF_CHAT_SUGGESTION.value, sub_kf_chat_suggestion_graph) ## 生成客服聊天建议
 builder.add_node(NodeName.TAG_SUGGESTION.value, sub_tag_graph) ## 生成客户标签
@@ -69,6 +75,9 @@ builder.add_edge(LoadDataNodeName.LOAD_ORDER_HISTORY.value, NodeName.INTENT_DETE
 
 
 builder.add_edge(NodeName.PRODUCT_QA.value,          NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.ORDER_QUERY.value,         NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.AFTER_SALE.value,          NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.WEEKLY_REPORT.value,       NodeName.TASK_RESULT_CONFIRM.value)
 builder.add_edge(NodeName.CHAT_SUGGESTION.value,     NodeName.TASK_RESULT_CONFIRM.value)
 builder.add_edge(NodeName.KF_CHAT_SUGGESTION.value,  NodeName.TASK_RESULT_CONFIRM.value)
 builder.add_edge(NodeName.TAG_SUGGESTION.value,      NodeName.TASK_RESULT_CONFIRM.value)

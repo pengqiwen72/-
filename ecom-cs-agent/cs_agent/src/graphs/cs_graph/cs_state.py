@@ -3,6 +3,7 @@ from typing_extensions import Annotated, List, TypedDict
 from enum import Enum
 from models.cs_models import ScheduleSuggestion, TagSetting, EmployeeInfo, ChatHistory, KFChatHistory, OrderHistory, TaskResult, NodeResult
 from models.cs_models import CustomerInfo, TagSuggestion, ReplySuggestion, CustomerProfile, CustomerTags, ProductQA
+from models.cs_models import OrderQueryResult, AfterSalePlan, WeeklyReport
 
 
 def reducer_node_result(current: List[NodeResult], update: List[NodeResult]) -> List[NodeResult]:
@@ -46,6 +47,9 @@ class IntermediateOutputState(TypedDict):
     suggestion_schedule:ScheduleSuggestion
     notify_content:     str
     product_qa:         ProductQA
+    order_query:        OrderQueryResult
+    after_sale:         AfterSalePlan
+    weekly_report:      WeeklyReport
 
 class CsState(InputState,IntermediateInputState,IntermediateOutputState,OutputState):
     '''
@@ -79,6 +83,9 @@ class CsStateField(str, Enum):
     SUGGESTION_SCHEDULE ="suggestion_schedule"
     NOTIFY_CONTENT      ="notify_content"
     PRODUCT_QA          ="product_qa"
+    ORDER_QUERY         ="order_query"
+    AFTER_SALE          ="after_sale"
+    WEEKLY_REPORT       ="weekly_report"
 
     ## 执行结果
     TASK_RESULT         ="task_result"
