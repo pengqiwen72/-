@@ -1,9 +1,0 @@
-#!/bin/bash
-echo "CS Sidebar Starting... "
-
-uv sync
-
-
-nohup uv run cs_sidebar_app.py >> cs_sidebar.log 2>&1 &
-
-echo "CS Sidebar Started"
