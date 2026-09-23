@@ -108,7 +108,9 @@ async function consumeSSE(res, onEvent) {
 const state = {
   threadId: null,
   running: false,
-  steps: 0,
+  steps: 0,        // 收到的进度事件总数
+  rows: 0,         // 时间线上实际占的行数（折叠后会少于步数）
+  group: null,     // 当前展开中的折叠行，见 addStep
   messages: 0,
 };
 
@@ -127,6 +129,8 @@ function setThread(id) {
 
 function resetPanels() {
   state.steps = 0;
+  state.rows = 0;
+  state.group = null;
   $('timeline').replaceChildren(el('div', { class: 'empty', text: '等待发起。' }));
   $('stepCount').textContent = '';
   $('approvalCard').hidden = true;
@@ -160,13 +164,18 @@ const TONE = {
   report_built: 'ok',
 };
 
-function addStep(ev) {
-  const timeline = $('timeline');
-  if (state.steps === 0) timeline.replaceChildren();   // 去掉「等待发起」的占位
-  state.steps += 1;
-  $('stepCount').textContent = '（' + state.steps + ' 步）';
+// 少数阶段天生啰嗦：`normalize`（字段归一）是把整张字段映射表逐条上报的，
+// 订单链路一次能刷 24 行，把整条链路淹掉。这类阶段折成一行「字段归一 ×24」，
+// 点开看逐条。
+//
+// 为什么用白名单而不是「连续 ≥N 条同名就折」：数据装载那 7 行也同名，但每行说的是
+// **不同的数据源**（欢迎语 / 坐席 / 标签体系 / 客户 / 会话 / 客服会话 / 订单），
+// 折起来正好丢掉「统一状态模型汇多源数据」这件事 —— 而那是要展示的重点。
+const COLLAPSIBLE = new Set(['normalize']);
 
-  const step = el('div', { class: 'step tone-' + (TONE[ev.stage] || 'info') },
+/** 普通的一行。 */
+function stepRow(ev) {
+  const row = el('div', { class: 'step tone-' + (TONE[ev.stage] || 'info') },
     el('div', { class: 'dot' }),
     el('div', {},
       el('span', { class: 'label', text: ev.label || ev.stage || '进度' }),
@@ -176,9 +185,56 @@ function addStep(ev) {
   // 留着是因为终端那边（quickstart 的 _print_events）用的是同一套字段 ——
   // 两边一起缩进，才不会一个有层次一个没层次。
   const depth = Number(ev.depth || 0);
-  if (depth) step.style.paddingLeft = depth * 16 + 'px';
+  if (depth) row.style.paddingLeft = depth * 16 + 'px';
+  return row;
+}
 
-  timeline.append(step);
+/** 折叠行：一行表头 +（默认藏起来的）明细。明细边来边塞，点表头展开。 */
+function groupRow(first) {
+  const count = el('b', { class: 'count' });
+  const caret = el('span', { class: 'caret', text: '▸' });
+  const details = el('div', { class: 'group-details' });
+  details.hidden = true;
+
+  const toggle = () => {
+    details.hidden = !details.hidden;
+    caret.textContent = details.hidden ? '▸' : '▾';
+  };
+  const head = el('div', { class: 'group-head', onclick: toggle },
+    caret, el('span', { class: 'label', text: first.label || first.stage }), count);
+
+  const root = el('div', { class: 'step tone-info group' },
+    el('div', { class: 'dot' }), el('div', {}, head, details));
+
+  const group = {
+    stage: first.stage,
+    root,
+    add(ev) {
+      group.n += 1;
+      count.textContent = '×' + group.n;
+      details.append(el('div', { class: 'group-item', text: ev.detail || '' }));
+    },
+    n: 0,
+  };
+  group.add(first);
+  return group;
+}
+
+function addStep(ev) {
+  const timeline = $('timeline');
+  if (state.steps === 0) timeline.replaceChildren();   // 去掉「等待发起」的占位
+  state.steps += 1;
+
+  // 同一段连续的可折叠阶段并进上一行；换个阶段就开新的一行
+  if (COLLAPSIBLE.has(ev.stage) && state.group && state.group.stage === ev.stage) {
+    state.group.add(ev);
+  } else {
+    state.group = COLLAPSIBLE.has(ev.stage) ? groupRow(ev) : null;
+    timeline.append(state.group ? state.group.root : stepRow(ev));
+    state.rows += 1;
+  }
+
+  $('stepCount').textContent = '（' + state.rows + ' 行 / ' + state.steps + ' 步）';
   timeline.scrollTop = timeline.scrollHeight;
 }
 

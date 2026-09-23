@@ -220,6 +220,28 @@ button.danger { color: var(--err); }
 .step.tone-warn .dot { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
 .step.tone-err .dot { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
 
+/* 折叠行（连续的同名阶段并成一行，见 app.js 的 COLLAPSIBLE）。
+ * 表头可点，明细默认藏起来 —— 折的是「占几行」，不是「丢掉什么」。 */
+.step.group .group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.step.group .caret { color: var(--faint); font-size: 11px; }
+.step.group .count { color: var(--brand); font-weight: 600; }
+.step.group .group-details {
+  margin-top: 3px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+}
+.step.group .group-item {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 1px 0;
+}
+
 /* ==================== 审批卡片 ==================== */
 
 .approval { border-color: #f2d9a8; background: #fffdf7; }
