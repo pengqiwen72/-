@@ -21,7 +21,7 @@ from graphs.cs_graph.sub_product_qa.sub_product_qa_state import (
 )
 from llm.llm_setting import is_offline_model
 from models.cs_models import NodeResult, ProductQA, TaskResult
-from observability.progress import emit, node_done
+from observability.progress import emit
 from rag.expansion import expand_query
 from rag.index import get_knowledge_base
 from utils.agent_logger import get_logger
@@ -176,7 +176,9 @@ def retrieve_answer_node(state: SubProductQAState, config: RunnableConfig):
     if product_qa.is_handoff:
         emit("handoff", detail=product_qa.reason or "置信度不足，转人工")
 
-    node_done(NodeName.RETRIEVE_ANSWER.value, f"置信度 {product_qa.confidence:.2f}")
+    # 这里原本还有一条 node_done("置信度 x.xx")，与上面 retrieve_done 的 detail
+    # 逐字重复 —— 时间线上连着两行说同一件事。节点跑完这件事由 updates 通道负责，
+    # 不需要再占一行。
 
     logger.info(f"回答：{product_qa.answer}")
 

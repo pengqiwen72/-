@@ -290,8 +290,7 @@ def collect_node(state: SubWeeklyReportState, config: RunnableConfig):
     notes = cur_notes + prev_notes
     emit("report_collect",
          detail=f"本周命中 {len(cur_rows)} 笔订单，上周 {len(prev_rows)} 笔")
-
-    node_done(NodeName.COLLECT.value, f"本周 {len(cur_rows)} 笔 / 上周 {len(prev_rows)} 笔")
+    # 不再补一条 node_done 报同样的两个数字 —— 见 progress.node_done 的说明
 
     return {
         F.ROWS_CURRENT.value: cur_rows,

@@ -24,6 +24,7 @@ from typing import Any, Callable, Iterator, Optional, Tuple
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from observability.progress import node_event
 from store.store_provider import get_fallback_store
 from utils.agent_logger import get_logger
 
@@ -177,8 +178,13 @@ class DemoRunner:
     def _iter(self, payload: Any, config: dict) -> Iterator[Tuple[str, dict]]:
         """消费图的事件流，逐条吐出 `(kind, data)`。
 
-        kind 取 `"progress"`（custom 通道的进度事件）或 `"update"`（节点更新）。
+        kind 取 `"progress"`（进度事件）或 `"update"`（节点更新）。
         不在这里取最终快照 —— 快照要等流真正结束才有意义，交给调用方。
+
+        进度事件有两个来源：节点里手写的 `emit()`（custom 通道），以及**节点跑完
+        但什么都没 emit** 时由 `node_event()` 兜底生成的一条（见 `NODE_EVENTS`）。
+        没有兜底的话，没写 emit 的那几条链路在界面上是空白的 —— 点了没反应，
+        然后审批卡片突然弹出来。
         """
         stream = self.graph.stream(
             payload,
@@ -186,6 +192,10 @@ class DemoRunner:
             stream_mode=["updates", "custom"],
             subgraphs=True,
         )
+
+        # 上一个节点自己 emit 过没有。custom 事件先于该节点的 update 到达，
+        # 所以读到 update 时这个标记反映的正是「刚跑完的那个节点」。
+        emitted = False
 
         for chunk in stream:
             # subgraphs=True 时事件是 (namespace, mode, data) 三元组
@@ -197,8 +207,15 @@ class DemoRunner:
                 mode, data = "updates", chunk
 
             if mode == "custom":
+                emitted = True
                 yield "progress", dict(data) if isinstance(data, dict) else {"raw": data}
             elif mode == "updates" and isinstance(data, dict):
+                if not emitted:
+                    for node_name in data:
+                        event = node_event(node_name)
+                        if event:
+                            yield "progress", event
+                emitted = False
                 yield "update", data
 
     def _snapshot(self, config: dict, result: RunResult) -> RunResult:
