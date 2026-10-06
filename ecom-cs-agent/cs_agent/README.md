@@ -25,6 +25,31 @@ uv run --project cs_agent python quickstart.py
 > `run_cs_agent` 里刻意用 `python -m langgraph_cli dev` 而不是 `uv run langgraph dev` ——
 > 后者在 Windows/Git-Bash 下会撞 uv 的 trampoline 报 "failed to canonicalize script path"。
 
+不用浏览器也能验收 SSE 与 HITL 全流程（输入刻意用 ASCII 菜单 id，绕开终端编码差异）：
+
+```bash
+cd cs_agent && set -a && . ./.env && set +a    # 取 DEMO_USER_*（未配置时用内置默认值）
+
+TOKEN=$(curl -s -X POST localhost:2024/cs/get_token -H 'Content-Type: application/json' \
+  -d "{\"user_id\":\"$DEMO_USER_ID\",\"password\":\"$DEMO_USER_PASSWORD\"}" | \
+  python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+
+# ① 发起：菜单 id 命中枚举（不调模型）直达标签链；打完 progress 停在 interrupt
+curl -sN -X POST localhost:2024/cs/chat/stream -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"task_input":"tag_suggestion"}'
+# -> event: open / progress ×N / interrupt（审批卡片里带 thread_id）
+
+# ② 审批：decision 取 ok | discard | recreate，必须回传同一个 thread_id
+curl -sN -X POST localhost:2024/cs/chat/resume -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"thread_id":"<上一步的>","decision":"ok"}'
+# -> progress ×N / done（task_result_code=0）
+```
+
+可用的菜单 id 就是 `cs_node.py` 的 `NodeName`：`product_qa` / `order_query` /
+`after_sale` / `weekly_report` / `tag_suggestion` / `profile_suggestion` /
+`schedule_suggestion` / `chat_suggestion` / `kf_chat_suggestion`。
+事件与字段的完整说明在各路由的 docstring（`src/webapp/chat_routes.py`）。
+
 ## src 目录说明
 
 | 目录 | 内容 |
