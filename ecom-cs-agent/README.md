@@ -272,9 +272,9 @@ cd cs_client/agent_client && uv run python cs_agent_test.py test  # 跑一轮对
 ## 八、测试
 
 ```bash
-python -m pytest cs_agent/tests -q                      # 后端：检索阈值 / 归一 / 政策 / 幂等 / 合成器 schema / 路由
-node cs_agent/tests/frontend/timeline_check.mjs          # 前端：时间线折叠逻辑（DOM 桩）
-python quickstart.py --yes                               # 端到端：13/13
+uv run --project cs_agent python -m pytest cs_agent/tests -q   # 后端：检索阈值 / 归一 / 政策 / 幂等 / 合成器 schema / 路由 / HITL 恢复
+node cs_agent/tests/frontend/timeline_check.mjs                 # 前端：时间线折叠逻辑（DOM 桩）
+uv run --project cs_agent python quickstart.py --yes            # 端到端：13/13
 ```
 
 `cs_admin/` 与 `cs_client/` 各自有独立的 `pyproject.toml` 与 `uv.lock`，用 `uv sync` 安装。
