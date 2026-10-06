@@ -24,8 +24,10 @@ import sys
 from pathlib import Path
 
 # ---- 让脚本能直接跑：把 src 挂到 sys.path，并把默认值钉在离线模式 ----
-_ROOT = Path(__file__).resolve().parent
-_SRC = _ROOT / "src"
+# 按**脚本自身的位置**定位，不依赖 cwd —— 从仓库根、从 cs_agent、从任意目录
+# 调用都成立（`python /path/to/ecom-cs-agent/quickstart.py` 也行）。
+_ROOT = Path(__file__).resolve().parent          # 仓库根
+_SRC = _ROOT / "cs_agent" / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
