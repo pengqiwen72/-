@@ -23,7 +23,8 @@ from utils.agent_logger import get_logger
 logger = get_logger("rag_document")
 
 # data/ 目录：src/rag/document.py -> src/rag -> src -> cs_agent
-_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+# （词法 parents，不写 .resolve()：见 utils/env_loader.py 的说明）
+_DATA_DIR = Path(__file__).parents[2] / "data"
 KNOWLEDGE_DIR = _DATA_DIR / "knowledge"
 SEED_DIR = _DATA_DIR / "seed"
 

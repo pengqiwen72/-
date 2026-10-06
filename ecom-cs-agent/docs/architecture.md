@@ -169,6 +169,7 @@ mock/http 适配器；`mcp` 则经 `integrations/mcp/bridge.py`（stdio 子进�
 | 幂等的「同键不同内容」抛冲突 | 需要人工介入 | 静默复用会退错钱，重复执行会退两次，两个都赌不起 |
 | 离线合成器而非录制回放 | 需要为每种输出写一个合成器 | 换一句对话仍然成立；回放一改输入就露馅 |
 | 前端时间线只折叠白名单阶段 | 新增啰嗦阶段要手动登记 | 「连续 ≥N 条同名就折」会折掉 `load_data` 那 7 行——那是要给人看的能力证据 |
+| `.env` 与路径常量都避开 `os.getcwd` | 多一个 `utils/env_loader.py`；路径要写词法 `parents[n]` | `langgraph dev` 的 blockbuster 会拦 `os.getcwd`，而裸 `load_dotenv()` 与 `Path(...).resolve()` 内部都在调它。模块只要是「首次请求才 import」的（工作台首请求才建图），整条请求就 500——两种写法都实测踩过 |
 
 ---
 

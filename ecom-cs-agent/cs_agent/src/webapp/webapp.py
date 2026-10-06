@@ -25,20 +25,21 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from utils.agent_logger import get_logger
+from utils.env_loader import load_agent_env
 from webapp.chat_routes import router as cs_router
 
-load_dotenv()
+load_agent_env()  # 统一入口，别裸调 load_dotenv()（见 utils/env_loader.py）
 
 logger = get_logger("webapp")
 
 #: 工作台静态页目录（`/cs/workbench/`）
-WEB_DIR = Path(__file__).resolve().parent / "static"
+#: （词法 parent，不写 .resolve()：见 utils/env_loader.py 的说明）
+WEB_DIR = Path(__file__).parent / "static"
 
 
 @asynccontextmanager

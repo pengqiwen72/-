@@ -36,8 +36,10 @@ from utils.agent_logger import get_logger
 
 logger = get_logger("policy")
 
-_POLICY_FILE = Path(__file__).resolve().parents[2] / "data" / "seed" / "policies.json"
-_PRODUCT_FILE = Path(__file__).resolve().parents[2] / "data" / "seed" / "products.json"
+# 词法 parents，不写 .resolve()：后者在 Windows 上会调 os.getcwd()，
+# 而 policy 是在请求路径里被 import 的（见 utils/env_loader.py）。
+_POLICY_FILE = Path(__file__).parents[2] / "data" / "seed" / "policies.json"
+_PRODUCT_FILE = Path(__file__).parents[2] / "data" / "seed" / "products.json"
 
 _TZ_CHINA = timezone(timedelta(hours=8))
 

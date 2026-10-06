@@ -16,8 +16,12 @@ from graphs.cs_graph.cs_node_load_data import NodeName as LoadDataNodeName
 from graphs.cs_graph.cs_node_load_data import load_welcome_message_node, load_employee_info_node, load_tag_setting_node, load_customer_info_node, load_chat_history_node, load_kf_chat_history_node, load_order_history_node
 
 import os
-from dotenv import load_dotenv
-load_dotenv()
+from utils.env_loader import load_agent_env
+
+# ⚠️ 必须走统一入口：本模块是在「请求上下文里」才被首次 import 的（工作台首请求
+# 才建图），裸调 load_dotenv() 会撞 langgraph dev 的 blockbuster 守卫，整条请求 500。
+# 详见 utils/env_loader.py 的模块说明。
+load_agent_env()
 
 from utils.agent_logger import get_logger
 

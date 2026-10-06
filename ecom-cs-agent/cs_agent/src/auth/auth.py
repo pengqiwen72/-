@@ -1,10 +1,10 @@
 from langgraph_sdk import Auth
-from dotenv import load_dotenv
 from utils.agent_logger import get_logger
+from utils.env_loader import load_agent_env
 import os
 from fastapi import Request
 
-load_dotenv()
+load_agent_env()  # 统一入口，别裸调 load_dotenv()（见 utils/env_loader.py）
 
 logger = get_logger("auth")
 

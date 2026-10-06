@@ -48,7 +48,9 @@ logger = get_logger("mcp_bridge")
 
 #: 仓库根目录（`mcp_server/` 就在这一层）。
 #: src/integrations/mcp/bridge.py -> parents[4]
-REPO_ROOT = Path(__file__).resolve().parents[4]
+#: 路径一律用词法 `parents`，不写 `.resolve()` —— 后者在 Windows 上会调
+#: `os.getcwd()`，在 langgraph dev 的 blockbuster 下直接 500（见 utils/env_loader.py）。
+REPO_ROOT = Path(__file__).parents[4]
 
 #: 单次工具调用超时（秒）。超时按「上游不可用」处理，走降级而不是把整条链路拖死。
 DEFAULT_CALL_TIMEOUT = 10.0

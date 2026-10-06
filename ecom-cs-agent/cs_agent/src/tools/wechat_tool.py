@@ -9,16 +9,16 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 import requests
-from dotenv import load_dotenv
 from typing import List
 from utils.agent_logger import get_logger
+from utils.env_loader import load_agent_env
 from utils.datetime_string import datetime2timestamp
 from utils.debug_aspect import debug
 import threading
 from typing import Optional
 
-# 加载环境变量
-load_dotenv()
+# 加载环境变量（统一入口，别裸调 load_dotenv()，见 utils/env_loader.py）
+load_agent_env()
 
 logger = get_logger("wechat_tool")
 

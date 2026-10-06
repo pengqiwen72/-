@@ -28,7 +28,8 @@ from utils.agent_logger import get_logger
 logger = get_logger("mock_seed_source")
 
 # data/seed 相对本文件：src/integrations/mock/seed_source.py -> ../../../data/seed
-_SEED_DIR = Path(__file__).resolve().parents[3] / "data" / "seed"
+# （词法 parents，不写 .resolve()：见 utils/env_loader.py 的说明）
+_SEED_DIR = Path(__file__).parents[3] / "data" / "seed"
 
 
 @lru_cache(maxsize=None)

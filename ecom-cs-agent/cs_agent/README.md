@@ -51,6 +51,13 @@ uv run --project cs_agent python quickstart.py
 `.env*` 的注释一律用 ASCII（英文）：`langgraph dev` 通过 python-dotenv 读 `.env` 时
 在中文 Windows 上会按 GBK 解码，UTF-8 中文注释会让它直接抛 `UnicodeDecodeError`。
 
+服务模式下还有一条硬约束：**别裸调 `load_dotenv()`，也别写 `Path(__file__).resolve()`**。
+`langgraph dev` 的 blockbuster 守卫会拦 `os.getcwd()`（只在事件循环线程里生效），
+而这两个写法内部都在调它 —— 模块只要是「首次请求才被 import」的（坐席工作台首次
+请求才建图），整条 SSE 请求就直接 500。所以：`.env` 统一走 `utils/env_loader.py`，
+模块级路径常量统一写词法的 `Path(__file__).parents[n]`。实测放行/拦截清单见
+`utils/env_loader.py` 的模块说明。
+
 ## 依赖
 
 `uv sync` 装基础依赖（含 MCP SDK）。`pyproject.toml` 里有一条

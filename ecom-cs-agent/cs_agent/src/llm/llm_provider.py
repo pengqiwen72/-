@@ -20,7 +20,6 @@ from __future__ import annotations
 import os
 from typing import Any, List, Optional, Sequence
 
-from dotenv import load_dotenv
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
@@ -28,8 +27,9 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
 from utils.agent_logger import get_logger
+from utils.env_loader import load_agent_env
 
-load_dotenv()
+load_agent_env()  # 统一入口，别裸调 load_dotenv()（见 utils/env_loader.py）
 
 logger = get_logger("llm_provider")
 
