@@ -8,5 +8,6 @@ echo "cs-admin 启动中……"
 
 uv sync
 
-nohup uv run cs_admin_app.py >> cs_admin.log 2>&1 &
+# PYTHONUTF8=1：日志与模板统一按 UTF-8 读写，不受 Windows 控制台 GBK 影响。
+PYTHONUTF8=1 nohup uv run cs_admin_app.py >> cs_admin.log 2>&1 &
 echo "已在后台启动，日志：cs_admin.log；端口 5000"
