@@ -253,7 +253,10 @@ def synthesize_profile(view: PromptView) -> dict:
     以旧画像为底 → 用新证据覆盖同名项 → 补上旧画像里没有但推论得出的项。
     """
     base: Dict[str, str] = {}
-    old = view.find("profile_items")
+    # ⚠️ 必须 find_last 不能 find：提示词里 {example_json} 排在真实 {customer_profile}
+    # 之前，两者顶层键都是 profile_items —— find 会拿到示例实例，把示例项当成旧画像
+    # （存量项被顶掉、示例文案混进结果）。详见 PromptView.find_last 的说明。
+    old = view.find_last("profile_items")
     if old and isinstance(old.get("profile_items"), list):
         for item in old["profile_items"]:
             if isinstance(item, dict) and item.get("item_name"):
@@ -545,6 +548,8 @@ def _empty_schedule(reason: str) -> dict:
     提示词里写了「没有明确的日程信息可以不用生成」，但下游节点会把这个
     dict 直接 `model_validate` 成 ScheduleSuggestion。返回不存在的字段会
     校验失败，所以字段要齐、值留空，用 title 是否为空表达「没有建议」。
+    （start_time 的空串依赖 `ScheduleSuggestion.start_time` 的 pattern 特意
+    放宽 —— 它必须扛过 `model_validate`，否则 registry 会回退成示例实例。）
     """
     logger.info(f"离线跟进任务：不生成（{reason}）")
     return {"title": "", "start_time": "", "duration": 30, "schedule_reason": reason}

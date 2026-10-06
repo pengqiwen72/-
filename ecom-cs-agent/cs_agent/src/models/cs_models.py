@@ -152,7 +152,13 @@ class OrderHistory(CsBaseModel):
 class ScheduleSuggestion(CsBaseModel):
     ''' 日程建议 '''
     title: str = Field(default="",title="Title", description="日程标题")
-    start_time: TimeStr = Field(default="",title="Start Time", description="开始时间，格式 yyyy-MM-dd HH:mm:ss")
+    #: ⚠️ pattern 特意允许空串，别「收紧」回 TimeStr。离线合成器用
+    #: 「title / start_time 同时为空」表达「没有日程建议」（见 `_empty_schedule`），
+    #: 而 pydantic 只校验**显式传入**的值、不校验默认值 —— 收紧后默认值 "" 照样能
+    #: 构造，但 `model_validate({"start_time": ""})` 会 ValidationError，合成结果
+    #: 被 registry 静默回退成示例实例（一条假日程还能通过下游节点的非空校验被真建出来）。
+    #: 下游 `create_schedule_node` 本就判空跳过，放开空串与它对齐。
+    start_time: Annotated[str, Field(pattern=r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})?$')] = Field(default="",title="Start Time", description="开始时间，格式 yyyy-MM-dd HH:mm:ss；没有日程建议时为空")
     duration: int = Field(default=30,title="Duration", description="持续时间，单位分钟")
     schedule_reason: str = Field(default="",title="Schedule Reason", description="日程建议原因")
 

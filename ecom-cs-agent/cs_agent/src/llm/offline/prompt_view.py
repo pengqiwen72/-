@@ -121,11 +121,29 @@ class PromptView:
 
         各业务模型的顶层键在提示词里是唯一的（chat_msgs / orders / tag_setting ...），
         所以可以据此反查输入数据，无需给每个合成器定制解析逻辑。
+
+        ⚠️ 「唯一」有一个例外：输入数据的顶层键与目标模型的 `{example_json}` 撞名时
+        （画像：示例实例和旧画像的顶层键都是 `profile_items`），这个函数会先撞上
+        示例实例。要取真实数据请用 `find_last`。
         """
         for block in self.non_schema_dicts():
             if set(keys) <= set(block):
                 return block
         return None
+
+    def find_last(self, *keys: str) -> Optional[dict]:
+        """找出**最后一个**包含全部指定键的非 schema 字典块。
+
+        专治「输入数据块与 `{example_json}` 顶层键撞名」：提示词模板里示例排在业务
+        数据块之前（`{example_json}` → chat_history → ... → `{customer_profile}`），
+        所以撞名时真实数据永远是最后一块。画像合成器踩过这个坑 —— 用 `find` 会把
+        示例实例当成旧画像，存量项被示例项顶掉、示例文案混进结果。
+        """
+        hit: Optional[dict] = None
+        for block in self.non_schema_dicts():
+            if set(keys) <= set(block):
+                hit = block
+        return hit
 
     def find_list(self, *keys: str) -> Optional[list]:
         """找出第一个「元素为字典且包含指定键」的列表块。"""
