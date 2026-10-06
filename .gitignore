@@ -1,0 +1,6 @@
+# 仓库级：操作系统与编辑器垃圾（各项目的忽略规则在各自目录内）
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
