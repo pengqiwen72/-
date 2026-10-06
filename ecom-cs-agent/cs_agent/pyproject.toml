@@ -42,3 +42,8 @@ override-dependencies = ["sse-starlette>=3.0.0"]
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
