@@ -1,0 +1,7 @@
+{
+  "_comment": "客服坐席。user_id 同时用作 store 的 key 与 configurable.user_id。",
+  "employees": [
+    { "user_id": "CS001", "name": "陈晓", "role": "客服坐席", "team": "售后一组", "deleted": false },
+    { "user_id": "CS002", "name": "林悦", "role": "运营专员", "team": "客户运营组", "deleted": false }
+  ]
+}
