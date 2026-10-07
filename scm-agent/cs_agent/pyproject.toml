@@ -1,0 +1,49 @@
+[project]
+name = "cs-agent"
+version = "0.1.0"
+description = "电商智能客服与运营助手：LangGraph 多链路编排 + RAG + HITL 人工审批"
+requires-python = "==3.12.*"
+dependencies = [
+    "fastapi==0.125.0",
+    "langchain==1.2.0",
+    "langchain-community==0.4.1",
+    "langchain-core==1.2.3",
+    "langchain-openai==1.1.6",
+    "langfuse==3.11.0",
+    "langgraph==1.0.5",
+    "langgraph-api==0.6.9",
+    "langgraph-cli==0.4.11",
+    "langgraph-runtime-inmem==0.20.1",
+    "langgraph-sdk==0.3.1",
+    # MCP 工具网关（TOOL_GATEWAY=mcp）。客户端在 src/integrations/mcp/bridge.py，
+    # 服务端在 mcp_server/server.py（stdio 子进程）—— 两边都 import mcp。
+    # 之所以放在基础依赖而不是 extra：`uv sync` 默认不装 extra，而 MCP 网关是
+    # 要展示的能力，让 `uv sync` 之后第一条 `--gateway mcp` 就报缺依赖不合适。
+    "mcp>=2.0",
+    "python-dotenv==1.2.1",
+    "pytz==2025.2",
+    "requests==2.32.5",
+    "starlette==0.50.0",
+    "typing-extensions==4.15.0",
+    "uvicorn==0.38.0",
+]
+[tool.uv]
+# langgraph-api 0.6.9 的元数据写着 sse-starlette>=2.1.0,<2.2.0，而 mcp>=2.0 要
+# >=3.0.0 —— 按元数据这两者永远装不到一起，`uv lock` 会直接报 unsatisfiable
+# （注意：放进 extra 也没用，锁文件必须覆盖所有 extra 才能保证 --extra 不用重算）。
+#
+# 但那条约束在运行时并不成立：实测 langgraph-api 0.6.9 与 sse-starlette 3.x 共存时
+# `langgraph dev` 正常起来（:2024/ok 返回 {"ok":true}），MCP 网关两条路径也跑通
+# 13/13 场景。所以这里显式覆盖掉那条陈旧的 pin，而不是为此砍掉 MCP 或降级整个
+# LangGraph 栈（抬到兼容 mcp 2.x 的 langgraph-api 会把 langgraph 从 1.0.5 拉到
+# 1.2.x、starlette 从 0.50 拉到 1.6，改动面远大于收益）。
+override-dependencies = ["sse-starlette>=3.0.0"]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

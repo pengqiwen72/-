@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}对话记录 - 智能客服运营后台{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-comments"></i> 对话记录
+                    <small class="text-muted">（员工ID: {{ user_id }}, 客户ID: {{ external_id }}）</small>
+                </h5>
+                <div class="d-flex align-items-center">
+                    <div class="me-3">
+                        <label for="dateFilter" class="form-label mb-0 me-2">开始日期:</label>
+                        <input type="date" id="dateFilter" class="form-control form-control-sm" style="width: 150px; display: inline-block;">
+                    </div>
+                    <button class="btn btn-primary btn-sm me-2" onclick="loadChatRecords()">
+                        <i class="fas fa-search"></i> 查询
+                    </button>
+                    <button class="btn btn-back" onclick="history.back()">
+                        <i class="fas fa-arrow-left"></i> 返回
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="chatRecordsContainer">
+                    <div class="text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    const userId = '{{ user_id }}';
+    const externalId = '{{ external_id }}';
+    
+    // 初始化日期选择器为365天前
+    function initDateFilter() {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 365);
+        const dateString = thirtyDaysAgo.toISOString().split('T')[0];
+        $('#dateFilter').val(dateString);
+    }
+    
+    // 加载对话记录
+    window.loadChatRecords = function() {
+        const startDate = $('#dateFilter').val();
+        let url = '/api/chat_records/' + userId + '/' + externalId;
+        
+        // 如果选择了日期，将其转换为YYYYMMDD格式
+        if (startDate) {
+            const afterYyyyMmDd = startDate.replace(/-/g, '');
+            url += '?after_yyyy_mm_dd=' + afterYyyyMmDd;
+        }
+        
+        $.get(url)
+            .done(function(response) {
+                if (response.success) {
+                    renderChatRecords(response.data);
+                } else {
+                    showAlert('加载对话记录失败: ' + response.error, 'danger');
+                }
+            })
+            .fail(function() {
+                showAlert('网络错误，请稍后重试', 'danger');
+            });
+    };
+    
+    // 渲染对话记录
+    function renderChatRecords(messages) {
+        const container = $('#chatRecordsContainer');
+        container.empty();
+        
+        if (messages.length === 0) {
+            container.append('<div class="text-center text-muted">暂无对话记录</div>');
+            return;
+        }
+        
+        // 按日期分组
+        const grouped = {};
+        messages.forEach(function(message) {
+            const date = message.YYYYMMDD || 'unknown';
+            if (!grouped[date]) {
+                grouped[date] = [];
+            }
+            grouped[date].push(message);
+        });
+        
+        // 按日期倒序排列
+        const sortedDates = Object.keys(grouped).sort().reverse();
+        
+        sortedDates.forEach(function(date) {
+            const dateMessages = grouped[date];
+            
+            // 按时间排序（如果有时间信息的话）
+            dateMessages.sort(function(a, b) {
+                // 这里可以根据实际的时间字段进行排序
+                return a.msg_id.localeCompare(b.msg_id);
+            });
+            
+            const dateCard = `
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h6 class="mb-0">${formatDate(date)}</h6>
+                    </div>
+                    <div class="card-body" id="date-${date}">
+                    </div>
+                </div>
+            `;
+            container.append(dateCard);
+            
+            const dateContainer = $(`#date-${date}`);
+            
+            dateMessages.forEach(function(message) {
+                const messageHtml = renderMessage(message);
+                dateContainer.append(messageHtml);
+            });
+        });
+    }
+    
+    // 渲染单条消息
+    function renderMessage(message) {
+        const isFromEmployee = message.from_id === userId;
+        const alignClass = isFromEmployee ? 'text-end' : 'text-start';
+        const bgClass = isFromEmployee ? 'bg-primary text-white' : 'bg-light';
+        
+        // 根据from_id和to_id判断发送者和接收者类型
+        const fromType = message.from_id === userId ? '员工' : '客户';
+        const toType = message.to_id === userId ? '员工' : '客户';
+        
+        const senderDisplay = `${fromType}(${message.from_id})`;
+        const receiverDisplay = `${toType}(${message.to_id})`;
+        
+        return `
+            <div class="mb-3 ${alignClass}">
+                <div class="d-inline-block p-3 rounded ${bgClass}" style="max-width: 70%;">
+                    <div class="mb-2">
+                        <strong>${senderDisplay}</strong> → ${receiverDisplay}
+                    </div>
+                    <div class="mb-2">
+                        ${message.content || ''}
+                    </div>
+                    <small class="opacity-75">
+                        消息ID: ${message.msg_id}
+                        ${message.YYYYMMDD ? ' | 日期: ' + message.YYYYMMDD : ''}
+                    </small>
+                </div>
+            </div>
+        `;
+    }
+    
+    // 格式化日期
+    function formatDate(dateStr) {
+        if (dateStr === 'unknown') return '未知日期';
+        if (dateStr.length === 8) {
+            const year = dateStr.substring(0, 4);
+            const month = dateStr.substring(4, 6);
+            const day = dateStr.substring(6, 8);
+            return `${year}年${month}月${day}日`;
+        }
+        return dateStr;
+    }
+    
+    // 显示提示信息
+    function showAlert(message, type) {
+        const alert = `
+            <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        $('.container-fluid').prepend(alert);
+    }
+    
+    // 初始化
+    initDateFilter();
+    window.loadChatRecords();
+});
+</script>
+{% endblock %} 

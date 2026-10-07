@@ -1,0 +1,60 @@
+# ---- 密钥与本地配置（绝不入库）----
+.env
+.env.*
+!.env.example
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+ENV/
+env/
+
+# ---- uv / 包管理 ----
+# uv.lock 建议入库以锁定依赖；若团队约定不入库可放开下面一行
+# uv.lock
+
+# ---- 运行时产物 ----
+*.log
+logs/
+data/index/
+data/runtime/
+.langgraph_api/
+*.sqlite
+*.db
+
+# ---- 测试与覆盖率 ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.swp
+
+# ---- macOS ----
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+__MACOSX/
+
+# ---- Windows ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
