@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>坐席工作台 · 电商智能客服与运营助手</title>
+  <!-- 相对路径：页面挂在 /scm/workbench 下，写绝对路径换前缀就 404 -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">电商智能客服与运营助手<small>坐席工作台</small></div>
+  <div class="spacer"></div>
+  <span class="badge" id="modeBadge" title="当前运行模式，来自 /scm/health">模式加载中…</span>
+  <span class="agent-chip" id="agentName">—</span>
+  <button id="logoutBtn">退出</button>
+</header>
+
+<main class="layout">
+
+  <!-- ============ 左：客户诉求 ============ -->
+  <section>
+    <div class="card">
+      <h2>客户诉求</h2>
+      <div class="body">
+        <textarea id="input" placeholder="粘贴客户原话，或点下面的示例（Ctrl / ⌘ + Enter 发送）"></textarea>
+        <div class="row">
+          <span class="badge" id="threadBadge">新会话</span>
+          <div class="spacer"></div>
+          <button id="sendBtn" class="primary">发送</button>
+        </div>
+        <div class="samples" id="samples"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>会话<small class="count" id="threadCount"></small></h2>
+      <div class="body thread" id="thread">
+        <div class="empty">还没有会话。发送一条客户诉求，或点上面的示例。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 右：执行过程 / 审批 / 结果 ============ -->
+  <section>
+    <div class="card">
+      <h2>执行过程<small class="count" id="stepCount"></small></h2>
+      <div class="body timeline" id="timeline">
+        <div class="empty">等待发起。</div>
+      </div>
+    </div>
+
+    <div class="card approval" id="approvalCard" hidden>
+      <h2>⏸ 等待人工确认</h2>
+      <div class="body" id="approvalBody"></div>
+    </div>
+
+    <div class="card result" id="resultCard" hidden>
+      <h2>最终结果</h2>
+      <div class="body" id="resultBody"></div>
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

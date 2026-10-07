@@ -1,0 +1,16 @@
+[project]
+name = "scm-client"
+version = "0.1.0"
+description = "电商智能客服 —— 客户端 SDK 与端到端调用示例"
+requires-python = "==3.12.*"
+dependencies = [
+    "langgraph==1.0.5",
+    "langgraph-sdk==0.3.1",
+    "python-dotenv==1.2.1",
+    "pytz==2025.2",
+    "requests==2.32.5",
+    "rich==14.2.0",
+]
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true

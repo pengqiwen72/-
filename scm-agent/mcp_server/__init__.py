@@ -15,12 +15,12 @@ MCP 业务工具网关（stdio）。
     不必为每个接入方各写一份 SDK；
   * 换成第三方工具集时，改的是 `MCP_SERVER_COMMAND` 指向谁，Agent 侧零改动。
 
-这里是**服务端**。客户端的实现在 `cs_agent/src/integrations/mcp/`。
+这里是**服务端**。客户端的实现在 `scm_agent/src/integrations/mcp/`。
 
 关于下面这段 sys.path 引导
 --------------------------
-网关要复用 `cs_agent` 里已经写好的端口实现（mock 读种子、http 调真实系统），
-所以把 `cs_agent/src` 挂进自己的 sys.path。这是**演示形态下的省事做法**：
+网关要复用 `scm_agent` 里已经写好的端口实现（mock 读种子、http 调真实系统），
+所以把 `scm_agent/src` 挂进自己的 sys.path。这是**演示形态下的省事做法**：
 真正做到独立部署时，这一段的替代品是「网关自己持有数据库连接 / HTTP 客户端」，
 而它对外暴露的工具契约一行都不用变 —— 这也正是把这层拆出来的意义。
 """
@@ -29,7 +29,7 @@ import os
 import sys
 from pathlib import Path
 
-_AGENT_SRC = Path(__file__).resolve().parents[1] / "cs_agent" / "src"
+_AGENT_SRC = Path(__file__).resolve().parents[1] / "scm_agent" / "src"
 if _AGENT_SRC.is_dir() and str(_AGENT_SRC) not in sys.path:
     sys.path.insert(0, str(_AGENT_SRC))
 

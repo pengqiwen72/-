@@ -8,7 +8,7 @@
     {"ok": true,  "data": <上游原样报文>}
     {"ok": false, "error": "not_found|unavailable|invalid|internal", "message": "..."}
 
-不这么做的代价见 `cs_agent/src/integrations/mcp/envelope.py` 的注释：
+不这么做的代价见 `scm_agent/src/integrations/mcp/envelope.py` 的注释：
 MCP 只有一个 `is_error`，分不出「这单没发货所以没有物流轨迹」和「快递接口超时」，
 而这两件事在客服链路里一个要如实回答、一个要降级转人工。
 
@@ -36,7 +36,7 @@ from mcp.server.mcpserver import MCPServer
 from integrations.mcp.envelope import wrap, wrap_error
 
 server = MCPServer(
-    name="cs-business-tools",
+    name="scm-business-tools",
     title="电商客服业务工具网关",
     version="1.0.0",
     instructions=(

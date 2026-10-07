@@ -6,18 +6,18 @@
 
 ```bash
 git clone <repo-url> ecom-cs-agent && cd ecom-cs-agent
-uv sync --project cs_agent                              # 装依赖（需要 uv；这一步要联网）
-uv run --project cs_agent python quickstart.py          # 13 个场景一次跑完
+uv sync --project scm_agent                              # 装依赖（需要 uv；这一步要联网）
+uv run --project scm_agent python quickstart.py          # 13 个场景一次跑完
 ```
 
 跑 demo 本身**不需要 API Key、不需要数据库、不需要起任何服务，也全程不联网**。
 想要交互式地一步步走（遇到审批时停下来问你）：
 
 ```bash
-uv run --project cs_agent python quickstart.py                    # 交互模式
-uv run --project cs_agent python quickstart.py --list             # 看全部 13 个场景
-uv run --project cs_agent python quickstart.py -s order           # 只跑订单联合查询
-uv run --project cs_agent python quickstart.py --gateway mcp      # 工具调用改走 MCP 网关（结果应与默认一致）
+uv run --project scm_agent python quickstart.py                    # 交互模式
+uv run --project scm_agent python quickstart.py --list             # 看全部 13 个场景
+uv run --project scm_agent python quickstart.py -s order           # 只跑订单联合查询
+uv run --project scm_agent python quickstart.py --gateway mcp      # 工具调用改走 MCP 网关（结果应与默认一致）
 ```
 
 > **关于这份仓库的定位**：它不是生产代码，而是把我在工作中做过的同类系统（企业微信客服
@@ -77,15 +77,15 @@ uv run --project cs_agent python quickstart.py --gateway mcp      # 工具调用
 
 | 简历里的说法 | 在代码里落在哪 | 怎么验证 |
 |---|---|---|
-| 统一调度 + 业务链路解耦 | `cs_graph.py` 主图：7 个数据装载节点 → 意图路由 → 10 个业务子图 → 结果确认，子图以节点形式挂载 | `quickstart.py` 任意场景 |
-| 统一状态模型 + 自定义 reducer | `cs_state.py` 承载商品／订单／售后／会话多源数据；`reducer_node_result` 累积执行轨迹 | 每场景末尾的「执行轨迹」 |
-| 意图识别「枚举 + 语义」两层 | `cs_node.py: intent_detection`：枚举精确匹配直达 → 模型语义识别 → 兜底通用问答 | `-s qa`（枚举）／`-s qa_miss`（语义）／`-s talk`（兜底） |
+| 统一调度 + 业务链路解耦 | `scm_graph.py` 主图：7 个数据装载节点 → 意图路由 → 10 个业务子图 → 结果确认，子图以节点形式挂载 | `quickstart.py` 任意场景 |
+| 统一状态模型 + 自定义 reducer | `scm_state.py` 承载商品／订单／售后／会话多源数据；`reducer_node_result` 累积执行轨迹 | 每场景末尾的「执行轨迹」 |
+| 意图识别「枚举 + 语义」两层 | `scm_node.py: intent_detection`：枚举精确匹配直达 → 模型语义识别 → 兜底通用问答 | `-s qa`（枚举）／`-s qa_miss`（语义）／`-s talk`（兜底） |
 | 商品知识库 RAG | `rag/`：解析 → 语义分块 → 向量化 → 混合召回 → 重排 → **置信度 → 转人工兜底**，回答带出处页脚 | `-s qa` 命中；`-s qa_miss` 资料未覆盖 → 转人工 |
 | 订单查询多 API 编排 | `sub_order_query`：`ThreadPoolExecutor` 并行拉订单／物流／库存，部分失败标 `degraded` 不整体失败 | `-s order`（含归一轨迹）；`-s order_degraded` |
 | 「模型只负责转述」硬约束 | `verify_no_new_numbers()`：回答里每个数字都必须在确定性事实单里出现过，否则丢弃模型输出回退事实转述 | `-s order`、`-s report` |
 | 售后政策引擎 + HITL + 幂等 | `integrations/policy.py` 全条件 AND + 优先级；高金额走 `interrupt()` 人工审批；`IdempotencyGuard` 保证退款不重复 | `-s aftersale`／`aftersale_approval`／`aftersale_replay` |
 | 数据周报（取数／算数／说话分离） | `sub_weekly_report`：指标与同环比由确定性代码算，模型只写摘要与异常提示 | `-s report` |
-| FastAPI + Pydantic + SSE | `webapp/chat_routes.py`：`/cs/chat/stream`、`/cs/chat/resume`、`/cs/state/{thread_id}` 等 5 个接口 | 见「服务模式」一节 |
+| FastAPI + Pydantic + SSE | `webapp/chat_routes.py`：`/scm/chat/stream`、`/scm/chat/resume`、`/scm/state/{thread_id}` 等 5 个接口 | 见「服务模式」一节 |
 | MCP 工具网关 | `mcp_server/`（stdio）暴露 7 个业务工具；`TOOL_GATEWAY=direct\|mcp` 一键切换 | `--gateway mcp` 全场景 13/13 |
 | JWT + 可观测 | 坐席登录按用户签发 JWT（非静态令牌）；`observability/progress.py` 统一进度事件，Langfuse 可选接入 | 坐席工作台（见「服务模式」） |
 
@@ -98,7 +98,7 @@ uv run --project cs_agent python quickstart.py --gateway mcp      # 工具调用
 ```mermaid
 flowchart TD
     START([任务输入]) --> CLEAN["cleanup_state<br/>清空上一轮状态"]
-    CLEAN --> WELCOME[cs_welcome_message]
+    CLEAN --> WELCOME[scm_welcome_message]
     WELCOME --> LOAD["加载业务数据 ×7<br/>欢迎语 / 坐席 / 标签体系 / 客户 / 会话 / 客服会话 / 订单"]
     LOAD --> INTENT{"intent_detection<br/>① 枚举精确匹配<br/>② 模型语义识别<br/>③ 兜底"}
     INTENT --> QA["product_qa<br/>RAG：召回 → 重排 → 置信度"]
@@ -200,8 +200,8 @@ flowchart LR
 ```text
 ecom-cs-agent/
 ├── quickstart.py              # 零配置演示入口：不启服务、不联网，13 个场景
-├── cs_agent/                  # 核心：LangGraph 智能体服务（约 1.5 万行）
-│   ├── src/graphs/cs_graph/   #   主图 + 10 个业务子图（每个子图 = graph/state/node 三件套）
+├── scm_agent/                  # 核心：LangGraph 智能体服务（约 1.5 万行）
+│   ├── src/graphs/scm_graph/   #   主图 + 10 个业务子图（每个子图 = graph/state/node 三件套）
 │   ├── src/rag/               #   解析 / 分块 / 向量化 / 混合召回 / 重排 / 置信度 / 出处
 │   ├── src/llm/               #   提示词 + provider（real / offline）+ offline/ 合成器
 │   ├── src/integrations/      #   ports + mock/http 适配器 + 字段归一 + 政策引擎 + 幂等 + MCP 桥
@@ -210,10 +210,10 @@ ecom-cs-agent/
 │   ├── data/seed/             #   虚构的种子数据（商品/订单/物流/库存/客户/政策/标签）
 │   └── data/knowledge/        #   RAG 语料：FAQ + 售后总则 + 物流发票 + 会员权益
 ├── mcp_server/                # MCP 工具网关（stdio，7 个业务工具）
-├── cs_admin/                  # Flask 运营后台：客户／订单／客服会话／标签等页面
-├── cs_client/                 # 客户端 SDK 与端到端脚本（打真实平台服务用）
+├── scm_admin/                  # Flask 运营后台：客户／订单／客服会话／标签等页面
+├── scm_client/                 # 客户端 SDK 与端到端脚本（打真实平台服务用）
 ├── docs/architecture.md       # 架构细节与关键取舍
-└── cs_agent/tests/            # pytest 套件 + 前端时间线的 node 回归脚本
+└── scm_agent/tests/            # pytest 套件 + 前端时间线的 node 回归脚本
 ```
 
 ---
@@ -246,25 +246,25 @@ ecom-cs-agent/
 进度、人工审批流转与运营后台。
 
 ```bash
-# 1) 起 LangGraph 平台服务（:2024，自动装配 webapp 的 /cs/* 路由）
-cd cs_agent && ./run_cs_agent
+# 1) 起 LangGraph 平台服务（:2024，自动装配 webapp 的 /scm/* 路由）
+cd scm_agent && ./run_scm_agent
 
 # 2) 坐席工作台（对话 + 实时进度时间线 + 审批卡片 + 结果卡片）
-#    http://127.0.0.1:2024/cs/workbench/     ← 账号取 cs_agent/.env 的 DEMO_USER_*
+#    http://127.0.0.1:2024/scm/workbench/     ← 账号取 scm_agent/.env 的 DEMO_USER_*
 
 # 3) 运营后台（Flask，:5000；读平台里的 Store，必须先起 1）
-cd cs_admin && ./run_cs_admin
+cd scm_admin && ./run_scm_admin
 ```
 
 工作台的执行过程时间线会折叠连续的同名阶段（如订单链路 36 步里有 24 步是字段归一，
 折成一行「字段归一 ×24」，点开看逐条），行数与步数都标出来。
 
-客户端 SDK 与端到端脚本在 `cs_client/`（连的是上述平台服务，不是离线 quickstart）。
+客户端 SDK 与端到端脚本在 `scm_client/`（连的是上述平台服务，不是离线 quickstart）。
 脚本之间是同目录相互 import，所以**要进到那个目录里跑**：
 
 ```bash
-cd cs_client/store_client && uv run python cs_demo_init.py        # 灌演示数据
-cd cs_client/agent_client && uv run python cs_agent_test.py test  # 跑一轮对话
+cd scm_client/store_client && uv run python scm_demo_init.py        # 灌演示数据
+cd scm_client/agent_client && uv run python scm_agent_test.py test  # 跑一轮对话
 ```
 
 ---
@@ -272,12 +272,12 @@ cd cs_client/agent_client && uv run python cs_agent_test.py test  # 跑一轮对
 ## 八、测试
 
 ```bash
-uv run --project cs_agent python -m pytest cs_agent/tests -q   # 后端：检索阈值 / 归一 / 政策 / 幂等 / 合成器 schema / 路由 / HITL 恢复
-node cs_agent/tests/frontend/timeline_check.mjs                 # 前端：时间线折叠逻辑（DOM 桩）
-uv run --project cs_agent python quickstart.py --yes            # 端到端：13/13
+uv run --project scm_agent python -m pytest scm_agent/tests -q   # 后端：检索阈值 / 归一 / 政策 / 幂等 / 合成器 schema / 路由 / HITL 恢复
+node scm_agent/tests/frontend/timeline_check.mjs                 # 前端：时间线折叠逻辑（DOM 桩）
+uv run --project scm_agent python quickstart.py --yes            # 端到端：13/13
 ```
 
-`cs_admin/` 与 `cs_client/` 各自有独立的 `pyproject.toml` 与 `uv.lock`，用 `uv sync` 安装。
+`scm_admin/` 与 `scm_client/` 各自有独立的 `pyproject.toml` 与 `uv.lock`，用 `uv sync` 安装。
 
 ---
 
@@ -297,7 +297,7 @@ uv run --project cs_agent python quickstart.py --yes            # 端到端：13
 * **依赖里有一条 `override-dependencies`**：`langgraph-api` 的元数据把
   `sse-starlette` 钉在 `<2.2.0`，与 `mcp>=2.0` 要求的 `>=3.0.0` 按元数据无解。实测两者
   在运行时共存无碍（`langgraph dev` 正常起、MCP 两条路径 13/13），所以显式覆盖那条
-  陈旧的 pin，理由写在 `cs_agent/pyproject.toml` 里。
+  陈旧的 pin，理由写在 `scm_agent/pyproject.toml` 里。
 
 ---
 
@@ -307,8 +307,8 @@ uv run --project cs_agent python quickstart.py --yes            # 端到端：13
   时间戳按「相对今天」生成，保证周报的「本周」永远新鲜。
 * **离线合成器不是大模型**：它按业务规则合成结构化输出，用于让 demo 离线可跑、
   可复现。接真实模型请配 `LLM_MODE=live` 与 API Key，调用方代码零改动。
-* **`cs_admin` 与 `cs_client` 是配套演示**，未做权限体系的完整实现；`mcp_server` 的
-  工具直接读 mock 数据源。两个模块各自持有一份 Store 客户端，`cs_client` 那份是
+* **`scm_admin` 与 `scm_client` 是配套演示**，未做权限体系的完整实现；`mcp_server` 的
+  工具直接读 mock 数据源。两个模块各自持有一份 Store 客户端，`scm_client` 那份是
   超集（多出灌数据用的写接口），没有抽公共包 —— 它们本就是「怎么连平台」的示例，
   抽出去反而多一层。
 * **没做的**：多租户、限流、审计日志落库、真实的支付/退款对接 —— 这些属于生产系统

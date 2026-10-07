@@ -4,7 +4,7 @@
 说 stdio。Agent 侧作为客户端连接它，用一个开关切过去：
 
 ```bash
-cd cs_agent
+cd scm_agent
 python quickstart.py --gateway mcp          # 经网关
 python quickstart.py --gateway direct       # 进程内直调（默认）
 ```
@@ -54,7 +54,7 @@ Agent 跟着提示词和编排走。中间隔一层标准协议之后：
 
 这两件事在客服链路里的处理路径完全不同，所以必须由信封把语义带过去，
 `is_error` 只留给「工具实现本身崩了」。错误码到异常类的映射表只有一份
-（`cs_agent/src/integrations/mcp/envelope.py`），服务端和客户端引用同一份，
+（`scm_agent/src/integrations/mcp/envelope.py`），服务端和客户端引用同一份，
 避免出现「服务端抛 `LogisticsNotFound`、客户端还原成泛化的 `IntegrationError`」
 这种降级失真。
 
@@ -66,8 +66,8 @@ Agent 跟着提示词和编排走。中间隔一层标准协议之后：
 
 ```bash
 # 在仓库根目录
-cs_agent/.venv/Scripts/python.exe -m mcp_server    # Windows
-cs_agent/.venv/bin/python       -m mcp_server      # macOS / Linux
+scm_agent/.venv/Scripts/python.exe -m mcp_server    # Windows
+scm_agent/.venv/bin/python       -m mcp_server      # macOS / Linux
 ```
 
 需要先装 SDK：`uv pip install 'mcp>=2.0'`（或 `pip install mcp`）。
@@ -81,8 +81,8 @@ cs_agent/.venv/bin/python       -m mcp_server      # macOS / Linux
 ```json
 {
   "mcpServers": {
-    "cs-business-tools": {
-      "command": "E:/项目/ecom-cs-agent/cs_agent/.venv/Scripts/python.exe",
+    "scm-business-tools": {
+      "command": "E:/项目/ecom-cs-agent/scm_agent/.venv/Scripts/python.exe",
       "args": ["-m", "mcp_server"],
       "cwd": "E:/项目/ecom-cs-agent"
     }
@@ -90,7 +90,7 @@ cs_agent/.venv/bin/python       -m mcp_server      # macOS / Linux
 }
 ```
 
-> `command` 要指向**本项目 venv 里的解释器**：网关复用 `cs_agent` 的端口实现，
+> `command` 要指向**本项目 venv 里的解释器**：网关复用 `scm_agent` 的端口实现，
 > 而它们依赖 langgraph 等包。真正的独立部署（网关自带数据库连接、不依赖 Agent 侧代码）
 > 是把它拆出去的自然下一步，接口契约不用变。
 

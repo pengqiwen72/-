@@ -10,10 +10,10 @@
 
 | 入口 | 起法 | 用的是什么 | 用途 |
 |---|---|---|---|
-| `quickstart.py` | `uv run --project cs_agent python quickstart.py` | `InMemorySaver` + `InMemoryStore`，进程内 | 零配置演示，13 个场景 |
-| 平台服务 | `cs_agent/run_cs_agent`（`langgraph dev` :2024） | 平台运行时 + webapp 的 `/cs/*` 路由 | SSE、JWT、坐席工作台 |
-| 运营后台 | `cs_admin/run_cs_admin`（Flask :5000） | 读平台服务的 Store | 客户／订单／会话／标签页 |
-| 客户端 SDK | `cs_client/` 下的脚本 | 打平台服务的 HTTP | 灌数据、端到端脚本 |
+| `quickstart.py` | `uv run --project scm_agent python quickstart.py` | `InMemorySaver` + `InMemoryStore`，进程内 | 零配置演示，13 个场景 |
+| 平台服务 | `scm_agent/run_scm_agent`（`langgraph dev` :2024） | 平台运行时 + webapp 的 `/scm/*` 路由 | SSE、JWT、坐席工作台 |
+| 运营后台 | `scm_admin/run_scm_admin`（Flask :5000） | 读平台服务的 Store | 客户／订单／会话／标签页 |
+| 客户端 SDK | `scm_client/` 下的脚本 | 打平台服务的 HTTP | 灌数据、端到端脚本 |
 | MCP 工具网关 | `integrations/mcp/bridge.py` 按需拉起 | stdio 子进程 | 演示工具解耦 |
 
 关键点：**前两者跑的是同一个 `build_graph()`**。`demo/runner.py` 与
@@ -28,12 +28,12 @@
 
 ### 1. 状态分四层，输入／输出都被收窄
 
-`cs_state.py` 把状态拆成 `InputState` / `IntermediateInputState` /
-`IntermediateOutputState` / `OutputState`，最终 `CsState` 是四者的并集，而
+`scm_state.py` 把状态拆成 `InputState` / `IntermediateInputState` /
+`IntermediateOutputState` / `OutputState`，最终 `ScmState` 是四者的并集，而
 `StateGraph(...)` 声明的是：
 
 ```python
-StateGraph(state_schema=CsState, input_schema=InputState, output_schema=OutputState)
+StateGraph(state_schema=ScmState, input_schema=InputState, output_schema=OutputState)
 ```
 
 于是**外部能传进来的只有 `task_input`，能拿走的只有 `task_result` 与
@@ -52,7 +52,7 @@ after_sale: AfterSalePlan
 ```
 
 推论有两条：新增子图产物时**先改 `OutputState`**；子图状态里**不要放 dataclass** ——
-跨检查点的数据必须是可序列化的 pydantic 模型（`models/cs_models.py`），
+跨检查点的数据必须是可序列化的 pydantic 模型（`models/scm_models.py`），
 而纯进程内的中间量（检索片段之类）才用 dataclass（`rag/types.py`）。
 
 ### 3. `reducer_node_result`：空 list 会**清空**累积
@@ -108,12 +108,12 @@ sequenceDiagram
 `intent_detection` 返回 `Command(goto=...)`，`goto` 的目标必须是图里**已注册的节点名**。
 所以 `NodeName` 枚举的值同时扮演三个角色：
 
-1. 图里的节点名（`cs_graph.py` 的 `add_node`）；
+1. 图里的节点名（`scm_graph.py` 的 `add_node`）；
 2. 路由目标（`Command(goto=...)`）；
 3. **前端菜单 id**（工作台按钮、`demo/scenarios.py` 里的场景输入）。
 
 三者任一改了就编译不过或路由不到。改菜单名时，`index.html` / `app.js` /
-`cs_node.py` 必须同步改 —— 这是本仓库唯一一处「改一处要改三处」的地方，
+`scm_node.py` 必须同步改 —— 这是本仓库唯一一处「改一处要改三处」的地方，
 刻意保留（它换来的是路由零成本：枚举命中时**不调模型**直达子图）。
 
 路由三层：① 输入恰好等于某个菜单 id → 直接跳，零成本；② 否则交给模型做语义识别；
@@ -177,8 +177,8 @@ mock/http 适配器；`mcp` 则经 `integrations/mcp/bridge.py`（stdio 子进�
 
 | 想改的 | 去哪 |
 |---|---|
-| 意图与链路路由 | `graphs/cs_graph/cs_node.py`、`cs_graph.py` |
-| 会话状态字段 | `graphs/cs_graph/cs_state.py` + 对应子图的 `*_state.py`（注意 output_schema） |
+| 意图与链路路由 | `graphs/scm_graph/scm_node.py`、`scm_graph.py` |
+| 会话状态字段 | `graphs/scm_graph/scm_state.py` + 对应子图的 `*_state.py`（注意 output_schema） |
 | 检索质量 | `rag/expansion.py`（同义词表，最常改）→ `rerank.py` → `confidence.py` |
 | 知识库内容 | `data/knowledge/**/*.md`（商品页由 `data/seed/products.json` 自动渲染） |
 | 售后政策规则 | `data/seed/policies.json`（全条件 AND + priority，逐条打印判定依据） |
@@ -186,5 +186,5 @@ mock/http 适配器；`mcp` 则经 `integrations/mcp/bridge.py`（stdio 子进�
 | 字段归一 | `integrations/normalize.py`（两条网关路径共用） |
 | 幂等与审批 | `integrations/idempotency.py`、`sub_after_sale/` |
 | 进度事件与时间线 | `observability/progress.py` 的 `NODE_EVENTS`，前端 `webapp/static/app.js` |
-| 演示场景 | `demo/scenarios.py`（与工作台 `/cs/samples` 共用同一份） |
+| 演示场景 | `demo/scenarios.py`（与工作台 `/scm/samples` 共用同一份） |
 | 离线合成逻辑 | `llm/offline/synth_ops.py`（新增输出类型时在此注册） |
