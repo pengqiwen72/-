@@ -1,0 +1,14 @@
+{
+  "_comment": [
+    "需求计划（生产/项目的用料需求）。due_days_ahead 是相对今天的天数，不写死日期。",
+    "它给「为什么现在要采购/调拨」提供业务解释——智能问答和采购理由可以引用它。"
+  ],
+  "demands": [
+    { "demand_id": "D20261001", "material_code": "M100023", "qty": 12000, "unit": "kg", "source": "生产计划 A3 产线", "due_days_ahead": 14, "status": "待满足" },
+    { "demand_id": "D20261002", "material_code": "M400301", "qty": 2400, "unit": "支", "source": "设备维保计划", "due_days_ahead": 7, "status": "待满足" },
+    { "demand_id": "D20261003", "material_code": "M300209", "qty": 120, "unit": "个", "source": "电气改造项目", "due_days_ahead": 21, "status": "待满足" },
+    { "demand_id": "D20261004", "material_code": "M500401", "qty": 800, "unit": "个", "source": "成品发运计划", "due_days_ahead": 10, "status": "待满足" },
+    { "demand_id": "D20261005", "material_code": "M100041", "qty": 3200, "unit": "kg", "source": "化工设备制造订单", "due_days_ahead": 30, "status": "待满足" },
+    { "demand_id": "D20261006", "material_code": "M200101", "qty": 60000, "unit": "个", "source": "月度滚动计划", "due_days_ahead": 25, "status": "待满足" }
+  ]
+}

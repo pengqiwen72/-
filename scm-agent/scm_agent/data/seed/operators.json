@@ -1,0 +1,9 @@
+{
+  "_comment": "业务操作员（提报/审批/质检/库管）。demo 里审批人和登记人从这里取名字，角色决定谁有权审批。",
+  "operators": [
+    { "operator_id": "OP001", "name": "张伟", "role": "采购员", "department": "采购部" },
+    { "operator_id": "OP002", "name": "王强", "role": "采购主管", "department": "采购部" },
+    { "operator_id": "OP003", "name": "赵磊", "role": "质检员", "department": "质量部" },
+    { "operator_id": "OP004", "name": "李静", "role": "仓库管理员", "department": "仓储部" }
+  ]
+}
