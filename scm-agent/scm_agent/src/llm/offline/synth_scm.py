@@ -63,6 +63,12 @@ def _norm_unit(unit: str) -> str:
     return _UNIT_ALIAS.get(unit, unit)
 
 
+#: 标签与数字之间的间隔：允许空白、量词、连接词，但**不许跨标点** ——
+#: 「实收 1000 支，没有发现问题」里 1000 与「发现」之间隔着逗号，
+#: 允许跨标点的话，实收数会被反向读成不良数（数字全对、语义全反）。
+_GAP = r"[^\d，,。；;]{0,6}"
+
+
 def _like(text: str, *labels: str) -> Optional[float]:
     """在文本里找「标签 + 数字」或「数字 + … + 标签」的数字。
 
@@ -71,10 +77,10 @@ def _like(text: str, *labels: str) -> Optional[float]:
     再远就不再认为两者相关 —— 宁可抽不到让上层追问，不要抽错。
     """
     for label in labels:
-        m = re.search(rf"{re.escape(label)}[^\d]{{0,6}}(\d+(?:\.\d+)?)", text)
+        m = re.search(rf"{re.escape(label)}{_GAP}(\d+(?:\.\d+)?)", text)
         if m:
             return float(m.group(1))
-        m = re.search(rf"(\d+(?:\.\d+)?)\s*(?:件|个|支|套|台|吨|kg)?[^\d]{{0,6}}{re.escape(label)}", text)
+        m = re.search(rf"(\d+(?:\.\d+)?)\s*(?:件|个|支|套|台|吨|kg)?{_GAP}{re.escape(label)}", text)
         if m:
             return float(m.group(1))
     return None
@@ -206,11 +212,24 @@ def synthesize_purchase_draft(view: PromptView) -> dict:
 # 收货登记要素提取
 # ---------------------------------------------------------------------------
 
+#: 「明确说了没有」的措辞：这是确定的结论（0），不是缺数据。
+#: 不识别这几句，「实收 1000 支，没有发现问题」会被抽成「不良 1000」——
+#: 数字全对、语义全反，而且不报任何错。
+_NO_DEFECT_HINTS = (
+    "没有发现", "没发现", "未发现", "没有不良", "无不良", "无缺陷",
+    "无破损", "没有问题", "无问题", "未检出", "无瑕疵",
+)
+
+
 def _extract_receipt_counts(text: str) -> Tuple[int, int]:
     """抽实收/不良数量。优先显式标签（实收/到货/收货、不良/缺陷/破损），
     其次「N 件中有 M 件」的并列句式。都抽不到就留 0，让上层追问。"""
     received = _like(text, "实收", "到货", "收货")
-    defect = _like(text, "不良", "缺陷", "瑕疵", "发现", "问题")
+
+    if any(hint in text for hint in _NO_DEFECT_HINTS):
+        defect = 0.0        # 「没发现问题」是明确结论：记 0，不去反向猜数字
+    else:
+        defect = _like(text, "不良", "缺陷", "瑕疵", "发现", "问题")
 
     if received is None or defect is None:
         # 「920 件中 30 件有问题」/「抽检 920，30 件变形」

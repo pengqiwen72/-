@@ -1,214 +1,71 @@
-from typing import List, Dict, Any
-from models.scm_models import CustomerInfo, TagInfo, ChatHistory, KFChatHistory, EmployeeInfo
-from models.scm_models import OrderInfo, OrderHistory, TagSetting, ChatMessage, CustomerProfile, CustomerTags
+"""
+store 到业务模型的取数层。
+
+为什么中间隔这一层
+------------------
+装载节点只认「函数返回模型」，不关心数据躺在哪个命名空间、字段叫什么名字。
+存储换布局（命名空间调整、外部接口顶替 store）时改这一层就够了，
+节点与子图保持不动。错误处理也统一在这里：查不到就返回空模型/空列表 +
+一条 error 日志，让上层的「数据缺失」分支有稳定的输入形状。
+"""
+
+from typing import List
+
+from models.scm_models import (
+    MaterialInfo,
+    OperatorInfo,
+    PurchaseOrderInfo,
+    StockItem,
+    SupplierInfo,
+    WarehouseInfo,
+)
 from store.store_client import StoreClient
 from utils.agent_logger import get_logger
 from utils.debug_aspect import debug
-from utils.datetime_string import timestamp2datetime
 
 store_client = StoreClient()
 
 logger = get_logger("store_tool")
 
+
 @debug
-def get_employee_info(user_id: str) -> EmployeeInfo:
-    """获取员工信息"""
+def get_operator_info(user_id: str) -> OperatorInfo:
+    """获取操作员信息（user_id 即 operator_id，如 OP001）"""
 
-    employee_info = EmployeeInfo()
-    employee = store_client.get_employee_by_user_id(user_id)
+    record = store_client.get_operator_by_id(user_id)
 
-    if not employee:
-        logger.error(f"获取员工信息失败: {user_id}")
-        return employee_info
+    if not record:
+        logger.error(f"获取操作员信息失败: {user_id}")
+        return OperatorInfo()
 
-    employee_info.user_id = employee.get("user_id", "")
-    employee_info.name = employee.get("name", "")
-
-    return employee_info
+    return OperatorInfo.model_validate(record)
 
 
 @debug
-def get_customer_info(external_id: str, follow_user_id: str) -> CustomerInfo:
-    """获取客户信息"""
-    
-    customer_info = CustomerInfo()
-    
-    if not external_id or not follow_user_id:
-        logger.error(f"获取客户时，参数缺失: {external_id}, {follow_user_id}")
-        return customer_info
-    
-    # 获取客户信息
-    external_user = store_client.get_external_user_by_external_id(external_id, follow_user_id)
-
-    if not external_user:
-        logger.error(f"获取客户信息失败: {external_id} {follow_user_id}")
-        return customer_info
-
-    customer_info.external_id = external_user.get("external_id")
-    customer_info.union_id = external_user.get("union_id")
-    customer_info.follow_user_id = external_user.get("follow_user_id")
-    
-    # 获取客户昵称
-    customer_info.nick_name = external_user.get("remark_name", external_user.get("name", ""))
-
-    return customer_info
+def get_materials() -> List[MaterialInfo]:
+    """物料主数据全量"""
+    return [MaterialInfo.model_validate(r) for r in store_client.list_all_materials()]
 
 
 @debug
-def get_customer_tags(external_id: str, follow_user_id: str) -> CustomerTags:
-    
-    # 获取客户标签
-    external_user_tags = store_client.get_external_user_tag_by_external_id(external_id, follow_user_id)
-
-    customer_tags = CustomerTags()
-    for tag in external_user_tags:
-        tag_info = TagInfo(tag_id=tag.get("tag_id"), tag_name=tag.get("tag_name"))
-        customer_tags.customer_tags.append(tag_info)
-    return customer_tags
-
-@debug
-def update_customer_tags(external_id: str, follow_user_id: str, tag_ids_add: List[str], tag_ids_remove: List[str]) -> bool:
-    """更新客户标签"""
-    if not external_id or not follow_user_id:
-        return False
-    
-    if not tag_ids_add:
-        tag_ids_add = []
-
-    if not tag_ids_remove:
-        tag_ids_remove = []
-        
-    external_user = store_client.get_external_user_by_external_id(external_id, follow_user_id)
-    
-    if not external_user:
-        return False
-    
-    tag_ids: List[str] = external_user.get("tags", [])
-    
-    if tag_ids_add:
-        tag_ids.extend([tag_id for tag_id in tag_ids_add if tag_id not in tag_ids])
-    
-    if tag_ids_remove:
-        tag_ids = [tag_id for tag_id in tag_ids if tag_id not in tag_ids_remove]
-    
-    
-    return store_client.upsert_external_user_tag_by_external_id(external_id, follow_user_id, tag_ids)
+def get_suppliers() -> List[SupplierInfo]:
+    """供应商主数据全量"""
+    return [SupplierInfo.model_validate(r) for r in store_client.list_all_suppliers()]
 
 
 @debug
-def get_customer_profile(external_id: str, follow_user_id: str) -> CustomerProfile:
-    """获取客户画像"""
-    
-    profile_dict = store_client.get_profile_by_external_id(external_id, follow_user_id)
-
-    if not profile_dict:
-        return CustomerProfile()
-    
-    try:
-        return CustomerProfile.model_validate(profile_dict)
-    except Exception as e:
-        logger.error(f"获取客户画像失败: {e}")
-        return CustomerProfile()
-    
-@debug
-def update_customer_profile(external_id: str, follow_user_id: str, profile: CustomerProfile) -> bool:
-    """更新客户画像"""
-    if not external_id or not follow_user_id or not profile:
-        return False
-        
-    return store_client.upsert_external_user_profile(external_id, follow_user_id, profile.model_dump())  
+def get_warehouses() -> List[WarehouseInfo]:
+    """仓库主数据全量"""
+    return [WarehouseInfo.model_validate(r) for r in store_client.list_all_warehouses()]
 
 
 @debug
-def get_chat_history(external_id: str, follow_user_id: str) -> ChatHistory:
-    """获取员工/客户近期聊天记录"""
-
-    msgs = store_client.list_last_wxqy_msg(external_id, follow_user_id)
-
-    chat_history = ChatHistory()
-
-    if not msgs:
-        return chat_history
-
-    for msg in msgs:
-        from_id = msg.get("from_id")
-        content = msg.get("content")
-        msg_time = timestamp2datetime(msg.get("msg_time"))
-        if from_id == follow_user_id:
-            sender = "客服坐席"
-            receiver = "客户"
-        else:
-            sender = "客户"
-            receiver = "客服坐席"
-
-        chat_history.chat_msgs.append(ChatMessage(sender=sender, receiver=receiver, content=content, msg_time=msg_time))
-
-    return chat_history
+def get_stock_items() -> List[StockItem]:
+    """库存快照全量（物料 × 仓库）"""
+    return [StockItem.model_validate(r) for r in store_client.list_all_stock()]
 
 
 @debug
-def get_kf_history(external_id: str) -> KFChatHistory:
-    """获取客户近期微信客服记录"""
-    
-    msgs = store_client.list_last_wxkf_msg(external_id)
-    
-    chat_history = KFChatHistory()
-    if not msgs:
-        return chat_history
-    
-    for msg in msgs:
-        external_id = msg.get("external_id")
-        content = msg.get("content")
-        msg_time = timestamp2datetime(msg.get("msg_time"))
-        
-        origin = msg.get("origin")
-
-        if origin == 3:
-            sender = "客户"
-            receiver = "客服"
-        elif origin == 5:
-            sender = "客服"
-            receiver = "客户"
-        else:
-            sender = "其他"
-            receiver = "其他"
-        
-        chat_history.kf_chat_msgs.append(ChatMessage(sender=sender, receiver=receiver, content=content, msg_time=msg_time))
-    
-    return chat_history
-
-
-@debug
-def get_order_history(union_id: str) -> OrderHistory:
-    """获取客户订单信息"""
-    
-    orders = store_client.list_wxxd_order_by_union_id(union_id)
-
-    order_history = OrderHistory()
-    if not orders:
-        return order_history
-    
-    for order in orders:
-        order_id = order.get("order_id")
-        order_products = order.get("order_products")
-        order_create_time = timestamp2datetime(order.get("order_create_time"))
-        order_history.orders.append(OrderInfo(order_id=order_id, order_products=order_products, order_create_time=order_create_time))
-    
-    return order_history
-
-
-@debug
-def get_tag_setting() -> TagSetting:
-    """获取标签设置"""
-    settings = store_client.list_all_tags_setting()
-    
-    tag_setting = TagSetting()
-    if not settings:
-        return tag_setting
-    
-    for setting in settings:
-        tag_id = setting.get("tag_id")
-        tag_name = setting.get("tag_name")
-        tag_setting.tag_setting.append(TagInfo(tag_id=tag_id, tag_name=tag_name))
-    
-    return tag_setting
+def get_purchase_orders() -> List[PurchaseOrderInfo]:
+    """采购订单全量（含在途）。子图按需再筛状态。"""
+    return [PurchaseOrderInfo.model_validate(r) for r in store_client.list_all_purchase_orders()]

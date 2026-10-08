@@ -2,10 +2,10 @@
 """
 零配置演示入口 —— 不启动任何服务，直接跑通智能体全链路。
 
-    python quickstart.py              # 交互模式：跑一遍，遇到审批停下来问你
-    python quickstart.py --yes        # 非交互：审批一律自动通过（CI 用）
-    python quickstart.py --list       # 列出所有场景
-    python quickstart.py -s tag       # 只跑指定场景
+    python quickstart.py                    # 交互模式：跑一遍，遇到审批停下来问你
+    python quickstart.py --yes              # 非交互：审批按场景预置决定，缺省自动通过（CI 用）
+    python quickstart.py --list             # 列出所有场景
+    python quickstart.py -s receipt_quality # 只跑指定场景
 
 设计要点
 --------
@@ -25,7 +25,7 @@ from pathlib import Path
 
 # ---- 让脚本能直接跑：把 src 挂到 sys.path，并把默认值钉在离线模式 ----
 # 按**脚本自身的位置**定位，不依赖 cwd —— 从仓库根、从 scm_agent、从任意目录
-# 调用都成立（`python /path/to/ecom-cs-agent/quickstart.py` 也行）。
+# 调用都成立（`python /path/to/scm-agent/quickstart.py` 也行）。
 _ROOT = Path(__file__).resolve().parent          # 仓库根
 _SRC = _ROOT / "scm_agent" / "src"
 if str(_SRC) not in sys.path:
@@ -98,7 +98,11 @@ def _print_progress(result) -> None:
 
 
 def _print_state_summary(state: dict) -> None:
-    """打印本次运行的业务产出。"""
+    """打印本次运行的业务产出。
+
+    五个业务字段与菜单 id 一一对应 —— 「哪个字段非空」就等于「这次走了哪条链路」，
+    这条对应关系既方便排障，也是这套统一状态模型的价值所在。
+    """
     node_results = state.get("node_result") or []
     if node_results:
         print("\n  执行轨迹：")
@@ -113,101 +117,119 @@ def _print_state_summary(state: dict) -> None:
         msg = getattr(task_result, "task_result", task_result)
         print(f"\n  最终结果：{msg}")
 
-    product_qa = state.get("product_qa")
-    if product_qa is not None:
-        print(f"\n  商品咨询：置信度 {product_qa.confidence:.2f}  "
-              f"状态 {product_qa.status}  出处 {len(product_qa.citations)} 条")
-        if product_qa.matched_terms:
-            print(f"  命中词：{'、'.join(product_qa.matched_terms)}")
-        if product_qa.reason:
-            print(f"  转人工原因：{product_qa.reason}")
+    material_qa = state.get("material_qa")
+    if material_qa is not None:
+        print(f"\n  问答：通道 {material_qa.channel}  置信度 {material_qa.confidence:.2f}  "
+              f"状态 {material_qa.status}  出处 {len(material_qa.citations)} 条"
+              f"{'  ⚠ 已降级' if material_qa.degraded else ''}")
+        if material_qa.matched_terms:
+            print(f"  命中词：{'、'.join(material_qa.matched_terms)}")
+        if material_qa.reason:
+            print(f"  转人工原因：{material_qa.reason}")
 
-    order_query = state.get("order_query")
-    if order_query is not None:
-        print(f"\n  订单查询：{order_query.order_id or '—'}  {order_query.status_text or '—'}  "
-              f"实付 {order_query.pay_amount:.2f} 元")
-        if order_query.logistics is not None:
-            trace = order_query.logistics
-            print(f"  物流：{trace.carrier} {trace.tracking_no}  {trace.status}")
-        if order_query.stocks:
-            for stock in order_query.stocks:
-                print(f"  库存：{stock.render()}")
-        if order_query.degraded:
-            print(f"  ⚠ 降级：{'；'.join(order_query.degraded)}")
-        if order_query.normalize_trace:
-            print("  归一轨迹：")
-            for line in order_query.normalize_trace:
-                print(f"    {line}")
-
-    plan = state.get("after_sale")
-    if plan is not None:
-        print(f"\n  售后方案：{plan.plan_id or '—'}  政策 {plan.policy_id or '—'}（{plan.policy_title or '—'}）")
-        print(f"  动作：{plan.action_type} / {plan.refund_type}  "
-              f"金额 {plan.amount:.2f} 元  状态 {plan.status}"
-              f"{'  审批人 ' + plan.approved_by if plan.approved_by else ''}")
-        if plan.refund_id:
-            print(f"  退款单号：{plan.refund_id}"
-                  f"{'（命中幂等，未重复发起）' if plan.replayed else ''}")
-        if plan.reason_trace:
-            # 标记已由节点写进字符串，这里原样打印——见 sub_after_sale_node._build_plan
+    purchase = state.get("purchase_request")
+    if purchase is not None:
+        print(f"\n  采购方案：{purchase.biz_id or '—'}  策略 {purchase.policy_id or '—'}"
+              f"（{purchase.policy_title or '—'}）")
+        print(f"  物料：{purchase.material_name or '—'}（{purchase.material_code or '—'}）"
+              f"  {purchase.qty:g}{purchase.unit or ''}  金额 {purchase.amount:.2f} 元  "
+              f"状态 {purchase.status}"
+              f"{'  审批人 ' + purchase.approved_by if purchase.approved_by else ''}")
+        if purchase.po_no:
+            print(f"  采购订单：{purchase.po_no}"
+                  f"{'（命中幂等，未重复下单）' if purchase.replayed else ''}")
+        if purchase.reason_trace:
+            # 标记已由节点写进字符串，这里原样打印 —— 见 sub_purchase_request_node
             print("  判定依据：")
-            for line in plan.reason_trace:
+            for line in purchase.reason_trace:
                 print(f"    {line}")
-        if plan.reason:
-            print(f"  方案说明：{plan.reason}")
 
-    report = state.get("weekly_report")
-    if report is not None:
-        print(f"\n  数据周报（{report.period_start} ~ {report.period_end}）"
-              f"{'  ⚠ 已降级' if report.degraded else ''}：")
-        for line in (report.table or "").splitlines():
-            print(f"    {line}")
-        for anomaly in report.anomalies:
-            print(f"    {anomaly.render()}")
-        if report.summary:
-            print(f"  摘要：{report.summary}")
-        for highlight in report.highlights:
-            print(f"    · {highlight}")
+    receipt = state.get("goods_receipt")
+    if receipt is not None:
+        print(f"\n  收货方案：{receipt.biz_id or '—'}  策略 {receipt.policy_id or '—'}"
+              f"（{receipt.policy_title or '—'}）")
+        print(f"  实收 {receipt.qty_received}  不良 {receipt.qty_defect}  "
+              f"不良率 {receipt.defect_rate:.2%}  处置 {receipt.disposition or '—'}  "
+              f"状态 {receipt.status}"
+              f"{'  复核人 ' + receipt.approved_by if receipt.approved_by else ''}")
+        if receipt.reason_trace:
+            print("  判定依据：")
+            for line in receipt.reason_trace:
+                print(f"    {line}")
 
-    suggestion = state.get("suggestion_tag")
-    if suggestion is not None:
-        print(f"\n  标签建议：{suggestion.model_dump_json(indent=2)}")
+    inventory = state.get("inventory_query")
+    if inventory is not None:
+        print(f"\n  库存报告：{inventory.material_name}（{inventory.material_code}）"
+              f"  可用合计 {inventory.total_available}{inventory.unit}"
+              f"{'  ⚠ 存在低于安全线的仓' if inventory.below_safety else ''}")
+        for row in inventory.rows:
+            print(f"    {row.render()}")
+        for transfer in inventory.transfers:
+            print(f"    {transfer.render()}")
+        if inventory.summary:
+            print(f"  结论：{inventory.summary}")
 
-    suggestion = state.get("suggestion_profile")
-    if suggestion is not None:
-        print(f"\n  画像建议：{suggestion.model_dump_json(indent=2)}")
+    supplier = state.get("supplier_query")
+    if supplier is not None:
+        print(f"\n  比价结果：{supplier.material_name}（{supplier.material_code}）"
+              f"  最优 {supplier.best_supplier_code or '—'}")
+        for score in supplier.scores:
+            print(f"    {score.render()}")
+        if supplier.summary:
+            print(f"  结论：{supplier.summary}")
 
 
-def _ask_approval(interrupts: list, auto_yes: bool) -> str:
-    """处理人工审批。返回回给图的决策值。"""
+def _ask_approval(interrupts: list, auto_yes: bool, scripted: list | None = None) -> str:
+    """处理人工审批。返回回给图的决策值。
+
+    `scripted` 是场景预置的决定队列（`spec["decisions"]`）：有些场景的看点
+    就在「驳回」「复核不通过」这类分支上（见 `demo/scenarios.py` 的
+    `purchase_reject` / `receipt_quality`），靠人手现场点选演不稳定，
+    所以预置决定优先于一切交互；取完之后才回落 —— 非交互模式默认通过，
+    交互模式回到人工点选。
+    """
     payload = interrupts[0].value if interrupts else {}
     if isinstance(payload, dict):
         desc = payload.get("description", "需要你确认")
         print(f"\n  ⏸  等待人工审批：{desc}")
-        if payload.get("type") == "after_sale_approval":
-            print(f"      方案 {payload.get('plan_id')}  "
-                  f"{payload.get('refund_type')} {payload.get('amount')} 元")
-            # reason_trace 的条目自带 ✓/✗ 前缀，这里不再补一层
-            for line in (payload.get("reason_trace") or []):
-                print(f"      {line}")
-        for key in ("old_tags", "new_tags", "old_profile", "new_profile"):
-            if payload.get(key):
-                print(f"      {key}: {payload[key]}")
+        kind = payload.get("type")
+        if kind == "purchase_approval":
+            print(f"      方案 {payload.get('plan_id')}  申请单 {payload.get('biz_id')}")
+            print(f"      {payload.get('material_name')}（{payload.get('material_code')}）"
+                  f"  {payload.get('qty')}{payload.get('unit')} × "
+                  f"{payload.get('unit_price')} 元 = {payload.get('amount')} 元")
+            print(f"      到货仓 {payload.get('target_warehouse')}  "
+                  f"预计到货 {payload.get('expect_arrival')}")
+        elif kind == "quality_review":
+            print(f"      方案 {payload.get('plan_id')}  采购订单 {payload.get('po_no')}")
+            print(f"      {payload.get('material_name')}（{payload.get('material_code')}）"
+                  f"  实收 {payload.get('qty_received')}  不良 {payload.get('qty_defect')}  "
+                  f"不良率 {float(payload.get('defect_rate') or 0):.2%}")
+            if payload.get("defect_type"):
+                print(f"      不良类型：{payload['defect_type']}")
+        # reason_trace 的条目自带 ✓/✗ 前缀，这里不再补一层
+        for line in (payload.get("reason_trace") or []):
+            print(f"      {line}")
     else:
         print(f"\n  ⏸  等待人工审批：{payload}")
+
+    if scripted:
+        decision = scripted.pop(0)
+        print(f"  → 按场景预置决定：{decision}")
+        return decision
 
     if auto_yes:
         print("  → 非交互模式，自动确认（ok）")
         return "ok"
 
-    print("\n  请选择：[1] 确认  [2] 放弃  [3] 重新生成")
+    print("\n  请选择：[1] 确认  [2] 放弃")
     try:
         choice = input("  > ").strip()
     except EOFError:  # pragma: no cover - 无 stdin 时
         print("  （读不到输入，视为确认）")
         return "ok"
 
-    return {"1": "ok", "2": "discard", "3": "recreate"}.get(choice, "ok")
+    return {"1": "ok", "2": "discard"}.get(choice, "ok")
 
 
 # ==================== 场景执行 ====================
@@ -265,6 +287,9 @@ def run_scenario(key: str, *, auto_yes: bool = False) -> int:
 
     spec = SCENARIOS[key]
     repeat = int(spec.get("repeat", 1))
+    # 预置决定的队列按「每个场景一份新的」来算：重复提交的场景不能第一轮就把
+    # 决定用光。列表短了取完即止 —— 后续中断回落到交互/默认。
+    scripted = list(spec.get("decisions") or [])
     print(f"\n{_hr('═')}")
     print(f"  场景：{spec['title']}  [{key}]  "
           f"（TOOL_GATEWAY={os.environ.get('TOOL_GATEWAY', 'direct')}）")
@@ -272,6 +297,8 @@ def run_scenario(key: str, *, auto_yes: bool = False) -> int:
     print(f"  说明：{spec['desc']}")
     if spec.get("env"):
         print(f"  注入：{spec['env']}")
+    if scripted:
+        print(f"  预置审批决定：{scripted}")
     if repeat > 1:
         print(f"  重复：同一诉求提交 {repeat} 次（用来验证幂等短路）")
     print(_hr("═"))
@@ -292,11 +319,11 @@ def run_scenario(key: str, *, auto_yes: bool = False) -> int:
             print("\n  执行过程：")
             _print_progress(result)
 
-            # 最多处理 3 轮审批，避免「重新生成」无限循环
+            # 最多处理 3 轮审批，避免异常情况下无限循环
             rounds = 0
             while result.interrupted and rounds < 3:
                 rounds += 1
-                decision = _ask_approval(result.interrupts, auto_yes)
+                decision = _ask_approval(result.interrupts, auto_yes, scripted)
                 result = runner.resume(result.thread_id, decision)
                 print("\n  审批后过程：")
                 _print_progress(result)
@@ -320,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="quickstart.py",
-        description="电商智能客服与运营助手 —— 离线零配置演示",
+        description="供应链采购仓储智能助手 —— 离线零配置演示",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--list", action="store_true", help="列出所有场景")
@@ -340,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         print("\n可用场景：")
         for key, spec in SCENARIOS.items():
-            print(f"  {key:<10} {spec['title']:<14} {spec['desc']}")
+            print(f"  {key:<22} {spec['title']:<24} {spec['desc']}")
         print()
         return 0
 
@@ -352,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
 
     gateway = os.environ.get("TOOL_GATEWAY", "direct")
     print(f"\n{_hr('═')}")
-    print("  电商智能客服与运营助手 —— 离线演示")
+    print("  供应链采购仓储智能助手 —— 离线演示")
     print(f"  模式：LLM_MODE={os.environ['LLM_MODE']}  "
           f"INTEGRATION_MODE={os.environ['INTEGRATION_MODE']}  "
           f"TOOL_GATEWAY={gateway}  （全程不联网）")

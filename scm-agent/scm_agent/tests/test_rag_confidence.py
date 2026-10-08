@@ -18,14 +18,15 @@ import pytest
 
 from rag import confidence as confidence_mod
 from rag.expansion import expand_query
+from utils.tokenize import tokenize
 
 # 语料里真实存在、能被完整回答的两个问题（借用了商品名，检索有明确依据）
 KEYBOARD_Q = "键盘可以同时连几台设备？"
 WOUND_Q = "灯臂磕碰了怎么处理？多久答复？"
 
-# 语料里根本没有的问题：商品名（指代词）能撞上商品页，但诉求词「无线充电」
-# 在全部商品资料里一个字都找不到
-UNANSWERABLE_Q = "保温杯支持无线充电吗？"
+#: 诉求词候选：与业务无关的荒诞词组，任何一本业务语料都不该收录。
+#: 用例会**逐个校验**它在当前语料里真的不存在（见过一次算我输）。
+_ABSENT_TERM_CANDIDATES = ("量子纠缠", "星际跃迁", "时光倒流", "永动机")
 
 
 # ---------------------------------------------------------------- 重排绝对分
@@ -92,18 +93,39 @@ def test_unanswerable_question_is_vetoed_by_ask_coverage_not_by_a_low_score(know
     这是整条兜底里最容易被误解的一处：拦住它的**不是** 0.35 那个阈值，
     而是「诉求词一个都没着落」这条语义判据。所以这里先断言 top1 高于阈值
     （分数本身够得着），再断言置信度被强制为 0。
+
+    问句与「保温杯支持无线充电吗」同构：真文档名（指代词，决定 top1「像谁」）
+    + 一个语料里绝对不存在的诉求词。文档名从语料里现取、诉求词逐个校验
+    不在语料里，是为了换语料后这条用例依然成立 —— 硬编的词组会在语料
+    更新后静默失效，那时断言红的地方就不是它要守的语义了。
     """
-    ranked = knowledge_base.search(UNANSWERABLE_Q)
-    conf, detail = confidence_mod.compute(ranked, UNANSWERABLE_Q)
+    title = knowledge_base.chunks[0].doc_title
+
+    # 只比双字及以上的 token：覆盖率判据本身就是这么算的（单字噪声不算数）
+    def _words(text: str) -> set:
+        return {t for t in tokenize(text) if len(t) >= 2}
+
+    corpus_words: set = set()
+    for chunk in knowledge_base.chunks:
+        corpus_words |= _words(chunk.text)
+    absent = next(
+        (w for w in _ABSENT_TERM_CANDIDATES if not (_words(w) & corpus_words)),
+        None,
+    )
+    assert absent, f"语料变了：候选诉求词全被收录，请补新的荒诞词组（{_ABSENT_TERM_CANDIDATES}）"
+
+    query = f"{title}{absent}？"
+    ranked = knowledge_base.search(query)
+    conf, detail = confidence_mod.compute(ranked, query)
 
     assert detail["top1"] > confidence_mod.threshold(), (
-        "该问题的 top1 是靠商品名（指代词）撞上商品页撑起来的，本来就不低"
+        "该问题的 top1 是靠文档名（指代词）撞上真实文档撑起来的，本来就不低"
     )
     assert detail["ask_coverage"] == 0.0
     assert conf == 0.0
     assert "诉求" in (detail.get("reason") or ""), "判负原因要说清是诉求没着落"
 
-    answer = knowledge_base.ask(UNANSWERABLE_Q)
+    answer = knowledge_base.ask(query)
     assert answer.status == "handoff"
     assert answer.citations == [], "转人工时不该再给出一条似是而非的依据"
     assert answer.reason

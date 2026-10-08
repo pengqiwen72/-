@@ -19,29 +19,21 @@ class NodeName(str, Enum):
     TASK_RESULT_CONFIRM = "task_result_confirm"
 
     # 子图节点（意图识别后，根据意图调用对应的子图）
-    PRODUCT_QA          = "product_qa" ## 商品咨询问答（RAG）
-    ORDER_QUERY         = "order_query" ## 订单查询（多 API 编排）
-    AFTER_SALE          = "after_sale" ## 售后处理（政策引擎 + HITL + 幂等）
-    WEEKLY_REPORT       = "weekly_report" ## 运营数据周报
-    CHAT_SUGGESTION     = "chat_suggestion" ## 生成客户聊天建议
-    KF_CHAT_SUGGESTION  = "kf_chat_suggestion" ## 生成客服聊天建议
-    TAG_SUGGESTION      = "tag_suggestion" ## 生成客户标签
-    PROFILE_SUGGESTION  = "profile_suggestion" ## 生成客户画像
-    SCHEDULE_SUGGESTION = "schedule_suggestion" ## 生成客户日程
-    NO_CLEAR_INTENTION  = "no_clear_intention" ## 未明确意图
+    MATERIAL_QA         = "material_qa"         ## 物料与制度问答（RAG + 图谱双通道）
+    PURCHASE_REQUEST    = "purchase_request"    ## 采购申请（策略引擎 + HITL 审批 + 幂等）
+    GOODS_RECEIPT       = "goods_receipt"       ## 收货验收（质检判定 + 超阈值人工复核）
+    INVENTORY_QUERY     = "inventory_query"     ## 库存管理（多仓分布 / 安全库存 / 调拨建议）
+    SUPPLIER_QUERY      = "supplier_query"      ## 供应商管理（查询 / 比价 / 履约评分）
+    NO_CLEAR_INTENTION  = "no_clear_intention"  ## 未明确意图
 
 # 意图列表（意图识别后，根据意图调用对应的子图）
 class IntentDetection(str, Enum):
-    PRODUCT_QA          = NodeName.PRODUCT_QA.value
-    ORDER_QUERY         = NodeName.ORDER_QUERY.value
-    AFTER_SALE          = NodeName.AFTER_SALE.value
-    WEEKLY_REPORT       = NodeName.WEEKLY_REPORT.value
-    CHAT_SUGGESTION     = NodeName.CHAT_SUGGESTION.value
-    KF_CHAT_SUGGESTION  = NodeName.KF_CHAT_SUGGESTION.value
-    TAG_SUGGESTION      = NodeName.TAG_SUGGESTION.value
-    PROFILE_SUGGESTION  = NodeName.PROFILE_SUGGESTION.value
-    SCHEDULE_SUGGESTION = NodeName.SCHEDULE_SUGGESTION.value
-    NO_CLEAR_INTENTION  = NodeName.NO_CLEAR_INTENTION.value
+    MATERIAL_QA        = NodeName.MATERIAL_QA.value
+    PURCHASE_REQUEST   = NodeName.PURCHASE_REQUEST.value
+    GOODS_RECEIPT      = NodeName.GOODS_RECEIPT.value
+    INVENTORY_QUERY    = NodeName.INVENTORY_QUERY.value
+    SUPPLIER_QUERY     = NodeName.SUPPLIER_QUERY.value
+    NO_CLEAR_INTENTION = NodeName.NO_CLEAR_INTENTION.value
 
 def cleanup_state_node(state: ScmState, config: RunnableConfig):
     """清理状态节点"""
@@ -51,56 +43,45 @@ def cleanup_state_node(state: ScmState, config: RunnableConfig):
         ScmStateField.NODE_RESULT: None,
         ScmStateField.TASK_RESULT: None,
         ## 信息Load
-        ScmStateField.EMPLOYEE_INFO: None,
-        ScmStateField.CHAT_HISTORY: None,
-        ScmStateField.KF_CHAT_HISTORY: None,
-        ScmStateField.ORDER_HISTORY: None,
-        ScmStateField.TAG_SETTING: None,
-        ScmStateField.CUSTOMER_INFO: None,
-        ScmStateField.CUSTOMER_TAGS: None,
-        ScmStateField.CUSTOMER_PROFILE: None,
+        ScmStateField.OPERATOR_INFO: None,
+        ScmStateField.MATERIALS: None,
+        ScmStateField.SUPPLIERS: None,
+        ScmStateField.WAREHOUSES: None,
+        ScmStateField.STOCK_ITEMS: None,
+        ScmStateField.PURCHASE_ORDERS: None,
         ## Intermediate Output 中间输出
-        ScmStateField.SUGGESTION_PROFILE: None,
-        ScmStateField.SUGGESTION_TAG: None,
-        ScmStateField.SUGGESTION_CHAT: None,
-        ScmStateField.SUGGESTION_KF: None,
-        ScmStateField.SUGGESTION_SCHEDULE: None,
-        ScmStateField.NOTIFY_CONTENT: None,
-        ScmStateField.PRODUCT_QA: None,
-        ScmStateField.ORDER_QUERY: None,
-        ScmStateField.AFTER_SALE: None,
-        ScmStateField.WEEKLY_REPORT: None,
+        ScmStateField.MATERIAL_QA: None,
+        ScmStateField.PURCHASE_REQUEST: None,
+        ScmStateField.GOODS_RECEIPT: None,
+        ScmStateField.INVENTORY_QUERY: None,
+        ScmStateField.SUPPLIER_QUERY: None,
     }
 
 def welcome_message(state: ScmState, config: RunnableConfig):
     """欢迎消息节点"""
-    
+
     logger.info("=== 欢迎消息 ===")
-    
+
     return {
         ScmStateField.NODE_RESULT: [NodeResult(
             execute_node_name=NodeName.WELCOME_MESSAGE.value,
             execute_result_code=0,
-            execute_result_msg="您好，我是电商智能客服助手，很高兴为您服务",
+            execute_result_msg="您好，我是供应链采购仓储智能助手，很高兴为您服务",
             execute_exceptions=[]
         )]
     }
 
 def intent_detection(state: ScmState, config: RunnableConfig) -> Command[Literal[*[intent.value for intent in IntentDetection]]]:
     """意图检测节点"""
-    
+
     logger.info("=== 意图检测 ===")
-    
+
     intents=[
-        Intent(intent_id=IntentDetection.PRODUCT_QA.value, intent_description="客户在问商品参数、使用方法、售后政策、运费包邮等具体问题，需要基于商品知识库给出有依据的答复"),
-        Intent(intent_id=IntentDetection.ORDER_QUERY.value, intent_description="需要查询订单状态、物流到哪了、什么时候能到、某个商品还有没有库存"),
-        Intent(intent_id=IntentDetection.AFTER_SALE.value, intent_description="客户要申请退款、退货、换货，反馈商品破损或有质量问题，需要按售后政策处理"),
-        Intent(intent_id=IntentDetection.WEEKLY_REPORT.value, intent_description="需要一份运营数据统计：周报、订单量/成交额/退款率等指标的同环比"),
-        Intent(intent_id=IntentDetection.CHAT_SUGGESTION.value, intent_description="我是销售人员，正在和客户沟通，我需要知道如何回复比较合适"),
-        Intent(intent_id=IntentDetection.KF_CHAT_SUGGESTION.value, intent_description="我是企业客服，在帮助客户解决问题，请帮助我生成客服回复建议"),
-        Intent(intent_id=IntentDetection.TAG_SUGGESTION.value, intent_description="我的客户情况有更新，我需要更客户标签"),
-        Intent(intent_id=IntentDetection.PROFILE_SUGGESTION.value, intent_description="我的客户情况有更新，我需要更新客户画像"),
-        Intent(intent_id=IntentDetection.SCHEDULE_SUGGESTION.value, intent_description="我和客户沟通过程中，我需要创建日程，方便提醒我跟进事项"),
+        Intent(intent_id=IntentDetection.MATERIAL_QA.value, intent_description="需要查询物料规格参数、替代料，或采购制度、验收标准、操作流程等有依据的问题"),
+        Intent(intent_id=IntentDetection.PURCHASE_REQUEST.value, intent_description="要发起采购申请、补货下单，需要走审批与下单流程"),
+        Intent(intent_id=IntentDetection.GOODS_RECEIPT.value, intent_description="到货了要登记收货、验收质检，或反馈到货不良、破损、退货"),
+        Intent(intent_id=IntentDetection.INVENTORY_QUERY.value, intent_description="要查询库存量、多仓分布、安全库存预警、调拨建议"),
+        Intent(intent_id=IntentDetection.SUPPLIER_QUERY.value, intent_description="要查供应商信息、比价、报价、交期与履约评分"),
         Intent(intent_id=IntentDetection.NO_CLEAR_INTENTION.value, intent_description="我想咨询一些问题，或者没有明确的意图，仅仅是聊聊天")
     ]
 
@@ -130,7 +111,7 @@ def intent_detection(state: ScmState, config: RunnableConfig) -> Command[Literal
 # 任务结果确认
 def task_result_confirm(state: ScmState, config: RunnableConfig):
     """任务结果确认节点"""
-    
+
     logger.info("=== 任务结果确认 ===")
 
     return {

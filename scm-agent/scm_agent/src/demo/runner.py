@@ -30,9 +30,11 @@ from utils.agent_logger import get_logger
 
 logger = get_logger("demo_runner")
 
-# 默认演示身份：客服坐席 CS001 服务客户 wx_ext_001
-DEFAULT_USER_ID = "CS001"
-DEFAULT_EXTERNAL_ID = "wx_ext_001"
+# 默认演示身份：采购员 OP001（提报人；采购申请单号、审批记录都落在他身上）
+# external_id 保留在配置里不删：ConfigurableField 是两个键的契约，
+# 缺一个下游节点就 KeyError（历史踩过），供应链域暂时不用它，传空串。
+DEFAULT_USER_ID = "OP001"
+DEFAULT_EXTERNAL_ID = ""
 
 # HITL 人工反馈协议的字段名，与各子图 `HumanFeedback.FIELD_NAME` 保持一致
 HITL_FIELD_NAME = "confirmed"

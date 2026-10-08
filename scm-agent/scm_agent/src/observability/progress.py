@@ -29,35 +29,18 @@ STAGE_LABELS: dict[str, str] = {
     "retrieve_start": "检索知识库",
     "retrieve_done": "检索完成",
     "rerank_done": "重排完成",
-    "fanout": "并发调用业务接口",
-    "normalize": "字段归一",
-    "policy_match": "售后政策匹配",
-    "llm_call": "调用大模型",
+    "policy_match": "采购策略匹配",
+    "quality_check": "质检判定",
     "hitl_wait": "等待人工确认",
     "idempotent_replay": "命中幂等",
-    "refund_submitted": "退款已提交",
+    "purchase_submitted": "采购订单已下达",
+    "receipt_submitted": "收货已登记",
+    "stock_aggregate": "库存聚合",
+    "supplier_score": "供应商评分",
     "handoff": "转人工",
-    "report_built": "周报生成完成",
-    # 周报链路内部的分段（取数 → 算数 → 说话），终端与工作台都按这些标签显示
-    "report_window": "周报统计周期",
-    "report_collect": "周报取数",
-    "report_metric": "指标计算",
-    "report_anomaly": "异常识别",
-    "report_narrative": "生成摘要",
-    "report_verify_failed": "摘要数字校验未通过",
     # 链路自身的业务步骤（由 NODE_EVENTS 兜底生成，见下）
-    "result_confirm": "结果确认",
-    "approval_pending": "已推送审批通知",
-    "tag_generate": "生成标签建议",
-    "tag_update": "更新客户标签",
-    "profile_generate": "生成画像建议",
-    "profile_update": "更新客户画像",
-    "schedule_generate": "生成跟进任务",
-    "schedule_create": "创建跟进任务",
-    "chat_generate": "生成话术建议",
-    "kf_chat_generate": "生成客服话术建议",
     "talk_reply": "闲聊兜底回复",
-    "node_start": "开始",
+    "result_confirm": "结果确认",
     "node_done": "完成",
 }
 
@@ -66,45 +49,45 @@ STAGE_LABELS: dict[str, str] = {
 #
 # 为什么需要这张表
 # ----------------
-# `emit()` 要靠节点作者手写，写了才有进度。事实是 10 条链路里只有 4 条写了
-# （售后 / 订单 / 商品 / 周报）—— 标签、画像、跟进任务、话术建议、闲聊那几条
-# 在工作台里的时间线是**空的**：点下去什么都不显示，然后审批卡片突然弹出来。
-# 只看「有没有事件」的冒烟测试发现不了这种空档。
+# `emit()` 要靠节点作者手写，写了才有进度。写漏的节点在工作台里的时间线是
+# **空的**：点下去什么都不显示，然后审批卡片突然弹出来。只看「有没有事件」的
+# 冒烟测试发现不了这种空档。
 #
-# 与其在 6 个子图里逐个补 `emit()`（漏一个还是空的），不如在 runner 消费 updates
+# 与其在每个子图里逐个盯 `emit()`（漏一个还是空的），不如在 runner 消费 updates
 # 通道时兜底生成：节点跑过就一定看得见，以后新增节点只要在这里登记一行。
-# 节点自己 emit 过的不会再补 —— 判断在 `DemoRunner._iter`，否则那 4 条链路
-# 每条都会变成「同样的话说两遍」。
+# 节点自己 emit 过的不会再补 —— 判断在 `DemoRunner._iter`，否则写全了的链路
+# 会变成「同样的话说两遍」。
 #
 # 只登记**业务步骤**：`cleanup_state`、`*_welcome_node` 这类内部节点不登记，
-# 未登记的节点不产生事件。父图上代表子图的那几个节点名（`tag_suggestion` 等）
+# 未登记的节点不产生事件。父图上代表子图的那几个节点名（`purchase_request` 等）
 # 也不登记 —— 子图内部的节点已经把过程讲清楚了，再补一条是重复。
 NODE_EVENTS: dict[str, tuple[str, str]] = {
     # 主图 · 数据装载：7 个节点拆开显示，让「统一状态模型汇多源数据」看得见
     "load_welcome_message_node":  ("load_data", "欢迎语"),
-    "load_employee_info_node":    ("load_data", "坐席信息"),
-    "load_tag_setting_node":      ("load_data", "标签体系"),
-    "load_customer_info_node":    ("load_data", "客户信息与画像"),
-    "load_chat_history_node":     ("load_data", "会话记录"),
-    "load_kf_chat_history_node":  ("load_data", "客服会话"),
-    "load_order_history_node":    ("load_data", "订单记录"),
+    "load_operator_info_node":    ("load_data", "操作员信息"),
+    "load_materials_node":        ("load_data", "物料主数据"),
+    "load_suppliers_node":        ("load_data", "供应商主数据"),
+    "load_warehouses_node":       ("load_data", "仓库主数据"),
+    "load_stock_node":            ("load_data", "库存快照"),
+    "load_purchase_orders_node":  ("load_data", "采购订单"),
     # 主图 · 路由与收尾
     "intent_detection":    ("intent", "枚举精确匹配 → 语义识别 → 兜底"),
     "task_result_confirm": ("result_confirm", ""),
-    # 标签建议
-    "tag_generate_node":        ("tag_generate", ""),
-    "tag_notify_feedback_node": ("approval_pending", "标签建议"),
-    "tag_update_node":          ("tag_update", ""),
-    # 客户画像
-    "profile_suggest_node":         ("profile_generate", ""),
-    "profile_notify_feedback_node": ("approval_pending", "画像建议"),
-    "profile_update_node":          ("profile_update", ""),
-    # 跟进任务
-    "schedule_generate_node": ("schedule_generate", ""),
-    "schedule_create_node":   ("schedule_create", ""),
-    # 话术建议
-    "chat_generate_node":    ("chat_generate", ""),
-    "kf_chat_generate_node": ("kf_chat_generate", ""),
+    # 物料与制度问答（节点自己 emit 检索事件，这里是漏 emit 时的兜底）
+    "material_qa_retrieve_node": ("retrieve_start", ""),
+    # 采购申请
+    "purchase_request_match_node":    ("policy_match", ""),
+    "purchase_request_approval_node": ("hitl_wait", ""),
+    "purchase_request_execute_node":  ("purchase_submitted", ""),
+    # 收货验收
+    "goods_receipt_match_node":    ("quality_check", ""),
+    "goods_receipt_approval_node": ("hitl_wait", ""),
+    "goods_receipt_execute_node":  ("receipt_submitted", ""),
+    # 库存管理
+    "inventory_query_node": ("stock_aggregate", ""),
+    # 供应商管理
+    "supplier_resolve_node": ("supplier_score", "解析物料与报价"),
+    "supplier_report_node":  ("supplier_score", "加权评分排名"),
     # 闲聊兜底
     "talk_reply_node": ("talk_reply", ""),
 }

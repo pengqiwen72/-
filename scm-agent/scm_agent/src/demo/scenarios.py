@@ -15,85 +15,110 @@ SCENARIOS` —— 依赖当前工作目录在 `sys.path` 上才算得通。而 `
 字段约定
 --------
     title   标题，列表与页面上显示的名字
-    input   喂给图的 `task_input`（原文照发，不要在这里改写客户措辞）
+    input   喂给图的 `task_input`（原文照发，不要在这里改写用户措辞）
     desc    一句话说明这条链路在验证什么
     env     可选，场景级环境变量覆盖（故障注入用）
     repeat  可选，同一诉求提交几次（幂等演示用）
+    decisions  可选，脚本化的人工决定（`-y` 时依次取用，用尽回落交互）
 """
 
 from __future__ import annotations
 
 SCENARIOS: dict[str, dict] = {
-    "qa": {
-        "title": "商品咨询问答",
-        "input": "product_qa",
-        "desc": "意图枚举直达商品咨询子图，问题取自客户最后一条消息；"
+    # ---- 智能问答（RAG 文档通道）----
+    "material_qa": {
+        "title": "物料与制度问答（制度类）",
+        "input": "采购申请超过多少金额需要主管审批？",
+        "desc": "意图枚举直达问答子图，双通道检索制度文档；"
                 "回答带出处页脚，置信度不足则转人工。",
     },
+    "material_qa_relation": {
+        "title": "物料问答（替代料，走图谱通道）",
+        "input": "M100023 断料了，有没有可以替代的物料？有货吗？",
+        "desc": "关系类问题走图谱多跳：物料 → 替代料 → 有货仓，"
+                "回答里的数量全部来自图节点属性，天然可溯源。",
+    },
     "qa_miss": {
-        "title": "商品咨询（知识库未覆盖）",
-        "input": "这款保温杯支持无线充电吗？",
-        "desc": "走语义意图识别进商品咨询子图；资料里没有「无线充电」，"
+        "title": "问答（知识库未覆盖）",
+        "input": "公司制度里有没有无人机送货的规定？",
+        "desc": "走语义意图识别进问答子图；语料里没有对应条款，"
                 "诉求词无着落 → 转人工，而不是硬编一个答案。",
     },
-    "order": {
-        "title": "订单联合查询",
-        "input": "帮我查一下订单 SO20260318002 到哪了",
-        "desc": "订单/物流/库存三路接口并行调用，逐条打印字段归一映射"
-                "（orderNo→order_id、分→元、毫秒时间戳→日期、嵌套地址扁平化）。",
+    "qa_degraded": {
+        "title": "问答（图谱通道故障降级）",
+        "input": "M100023 断料了，有没有可以替代的物料？有货吗？",
+        "desc": "注入图谱接口故障并连跑 4 次：前三次失败后熔断器打开，"
+                "第四次 L1 快速失败 —— 降级为纯文档通道并在页脚注明，"
+                "链路不整体失败。",
+        "env": {"MOCK_FAIL_ACTIONS": "graph"},
+        "repeat": 4,
     },
-    "order_degraded": {
-        "title": "订单查询（物流接口故障）",
-        "input": "帮我查一下订单 SO20260318002 到哪了",
-        "desc": "注入物流接口故障，验证「部分失败不整体失败」："
-                "订单与库存照常返回，缺的那一路记进 degraded 并如实告知客户。",
-        "env": {"MOCK_FAIL_ACTIONS": "logistics"},
+    # ---- 库存管理 ----
+    "inventory_query": {
+        "title": "库存查询（多仓分布）",
+        "input": "M100023 各个仓库还有多少库存？",
+        "desc": "按仓库展开库存快照：可用量 = 在库 − 预留，"
+                "逐仓判定安全库存并给出可支撑天数。",
     },
-    "aftersale": {
-        "title": "售后处理（低金额自动退款）",
-        "input": "订单 SO20260315001 的保温杯杯盖密封圈破损了，我要退款",
-        "desc": "政策引擎按「全条件 AND + 优先级」匹配规则库，命中破损包赔；"
-                "金额低于审批线直接执行，并打印每条条件的判定依据。",
+    "inventory_low": {
+        "title": "安全库存预警",
+        "input": "M400301 库存还够吗？会不会断料？",
+        "desc": "该物料某仓低于安全线 → 报预警而不是只报数字；"
+                "调拨建议在 Phase 6 接入（从余量仓调往缺口仓）。",
     },
-    "aftersale_replay": {
-        "title": "售后重复提交（幂等）",
-        "input": "订单 SO20260315001 的保温杯杯盖密封圈破损了，我要退款",
+    # ---- 供应商管理 ----
+    "supplier_compare": {
+        "title": "供应商比价",
+        "input": "M100023 哪家供应商报价便宜？",
+        "desc": "取三家报价按「价格 / 准时率 / 不良率」加权评分排名，"
+                "并给出最高与最低报价的价差。",
+    },
+    "supplier_score": {
+        "title": "供应商履约评估",
+        "input": "帮我看看 S007 这家供应商的履约情况，交期和不良率怎么样",
+        "desc": "同一套评分口径（只读计算，不落库），验证同一种子连查两次结果一致。",
+    },
+    # ---- 采购执行（HITL）----
+    "purchase_auto": {
+        "title": "采购申请（免审批自动下单）",
+        "input": "给 WH01 申购 3000kg 冷轧钢板 1.2mm",
+        "desc": "要素提取 → 金额在自动处理额度内 → 免审批直接下单；"
+                "申请单号由要素确定性生成。",
+    },
+    "purchase_approval": {
+        "title": "采购申请（大额转人工审批）",
+        "input": "给 WH01 申购 10000kg 冷轧钢板 1.2mm，产线急用",
+        "desc": "金额越过审批线 → interrupt 等主管决定 → 批准后由独立的执行节点"
+                "下单；中断节点无副作用，所以重放不会重复下单。",
+    },
+    "purchase_reject": {
+        "title": "采购申请（审批驳回）",
+        "input": "给 WH01 申购 10000kg 冷轧钢板 1.2mm，产线急用",
+        "desc": "同一条大额申请，这次审批给出驳回：方案标记 rejected，"
+                "执行节点不做任何写操作，如实告知申请人。",
+        "decisions": ["discard"],
+    },
+    "purchase_replay": {
+        "title": "采购申请重复提交（幂等）",
+        "input": "给 WH01 申购 3000kg 冷轧钢板 1.2mm",
         "desc": "同一诉求提交两次：第二次命中幂等记录后短路返回首次结果，"
-                "不会产生第二个退款单号。",
+                "不会产生第二张采购订单。",
         "repeat": 2,
     },
-    "aftersale_approval": {
-        "title": "售后处理（高金额人工审批）",
-        "input": "订单 SO20260320008 的落地灯灯臂磕碰了，我要退货退款",
-        "desc": "599 元越过审批线 → interrupt 等人工作出决定 → 批准后由独立的执行节点"
-                "发起退款；中断节点本身无副作用，所以重放不会重复退款。",
+    # ---- 收货验收（HITL）----
+    "receipt_normal": {
+        "title": "收货验收（正常入库）",
+        "input": "PO20260928002 到货了，实收 1000 支，没有发现问题",
+        "desc": "不良率 0% 在允许范围内 → 直接办理入库，不惊动人工。",
     },
-    "report": {
-        "title": "运营数据周报",
-        "input": "给我出一份本周的运营数据周报",
-        "desc": "取数 → 算数 → 说话 三段分离：指标与同环比由确定性代码算，"
-                "模型只写摘要，且摘要里出现的每个数字都必须能在指标表里找到。",
+    "receipt_quality": {
+        "title": "收货验收（不良率超阈值复核）",
+        "input": "PO20260928002 到货 920 支，开箱抽检发现 30 支磕碰变形",
+        "desc": "不良率 3.26% 超过阈值 → interrupt 等质检复核 → 按结论决定"
+                "整批退货或让步接收；复核节点同样无副作用、可重放。",
+        "decisions": ["ok"],
     },
-    "tag": {
-        "title": "生成客户标签",
-        "input": "给这个客户打个标签",
-        "desc": "走标签子图，出建议后等人工审批，可确认/放弃/重新生成。",
-    },
-    "profile": {
-        "title": "生成客户画像",
-        "input": "帮我更新一下客户画像",
-        "desc": "走画像子图，从对话与订单中抽取画像项，同样带人工审批。",
-    },
-    "schedule": {
-        "title": "创建跟进日程",
-        "input": "给客户安排一个回访日程",
-        "desc": "走日程子图，生成跟进建议并创建日程（mock 不真的建日程）。",
-    },
-    "chat": {
-        "title": "坐席话术建议",
-        "input": "帮我看看怎么回复客户",
-        "desc": "走话术建议子图，结合历史对话生成回复建议。",
-    },
+    # ---- 兜底 ----
     "talk": {
         "title": "闲聊兜底",
         "input": "你好呀",
@@ -101,22 +126,24 @@ SCENARIOS: dict[str, dict] = {
     },
 }
 
-#: 默认执行顺序 —— 由浅入深：先看路由，再看取数与审批，最后是带人工确认的几条子图。
+#: 默认执行顺序 —— 由浅入深：先看路由与只读查询，再看写链路与人工确认。
 #: 「闲聊」放最前面是因为它最不依赖种子数据，链路最短，先跑通能立刻确认环境没问题。
 DEFAULT_ORDER = [
-    "talk", "qa", "qa_miss",
-    "order", "order_degraded",
-    "aftersale", "aftersale_replay", "aftersale_approval",
-    "report",
-    "chat", "tag", "schedule", "profile",
+    "talk",
+    "material_qa", "material_qa_relation", "qa_miss", "qa_degraded",
+    "inventory_query", "inventory_low",
+    "supplier_compare", "supplier_score",
+    "purchase_auto", "purchase_approval", "purchase_reject", "purchase_replay",
+    "receipt_normal", "receipt_quality",
 ]
 
 
 #: 不适合直接摆成页面按钮的场景，以及原因：
-#:   * order_degraded    —— 点了就往业务接口里注入故障，工作台上不该有这种按钮
-#:   * aftersale_replay  —— 靠「提交两次」才看得出效果，只点一次看不到幂等短路
-#:   * qa                —— input 是意图枚举名而非一句人话，问题取自客户最后一条消息
-_UI_EXCLUDED = frozenset({"order_degraded", "aftersale_replay", "qa"})
+#:   * qa_degraded       —— 点了就往图谱接口里注入故障并连跑 4 次，工作台上不该有这种按钮
+#:   * purchase_replay   —— 靠「提交两次」才看得出效果，只点一次看不到幂等短路
+#:   * purchase_reject   —— decisions 预置了「驳回」，按钮上跑不出「换个人来批」的体验
+#:   * receipt_quality   —— decisions 预置了复核结论，页面上应当由人现场点
+_UI_EXCLUDED = frozenset({"qa_degraded", "purchase_replay", "purchase_reject", "receipt_quality"})
 
 
 def ui_samples() -> list[dict]:
@@ -125,7 +152,7 @@ def ui_samples() -> list[dict]:
     与命令行共用同一张表，所以标题、措辞、说明文字只有这一处，
     不会出现「CLI 里能跑、页面上点了报错」的错位。
 
-    两重过滤：显式排除上面那三个；再挡掉带 `env` / `repeat` 的场景 ——
+    两重过滤：显式排除上面那几个；再挡掉带 `env` / `repeat` 的场景 ——
     将来有人加了新的故障注入场景，它会自动留在命令行里，不会被顺手带上页面。
     """
     return [

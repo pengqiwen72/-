@@ -1,10 +1,31 @@
+"""
+长期记忆（LangGraph Store）访问封装 —— 供应链域命名空间。
+
+命名空间约定与 `store/seed_loader.py` 的写入侧一一对应
+-------------------------------------------------------
+    ("operator",)                  key=operator_id
+    ("material",)                  key=material_code
+    ("supplier",)                  key=supplier_code
+    ("warehouse",)                 key=warehouse_code
+    ("stock", material_code)       key=warehouse_code   按物料看多仓
+    ("stock_wh", warehouse_code)   key=material_code    按仓库盘点
+    ("quote", material_code)       key=supplier_code    某物料的各家报价
+    ("purchase_order",)            key=po_no
+    ("receipt",)                   key=receipt_no
+    ("demand",)                    key=demand_id
+    ("ticket",)                    key=ticket_no
+
+读者与写者必须是同一套口径：命名空间写错一个字符不会报错，只会「查不到」——
+看起来像数据不存在，排查成本很高。所以这里每个方法都紧挨着写清楚它读哪个空间。
+"""
+
 from store.store_provider import resolve_store
 from utils.debug_aspect import debug
 from typing import List, Dict, Any, Optional
 from langgraph.store.base import SearchItem, Item, BaseStore
 
-# 「要全部」时用的条数上限。search() 的默认 limit 是 10，而标签体系、员工名册
-# 这类全量查询显然不止 10 条 —— 不显式传就会静默丢数据。
+# 「要全部」时用的条数上限。search() 的默认 limit 是 10，而物料主数据有 47 条、
+# 库存点有 120 个 —— 不显式传就会静默丢数据。
 _SEARCH_ALL = 10000
 
 
@@ -48,173 +69,113 @@ class StoreClient:
         return self.item2dict(item)
 
     @debug
+    def put_item(self, namespace: tuple, key: str, value: Dict[str, Any]) -> None:
+        self.store.put(namespace, key, value)
+
+    @debug
     def get_all_namespaces(self, limit: int = 100) -> list:
         return self.store.list_namespaces(limit=limit)
 
-    # ==================== 员工信息 ====================
-
     @debug
-    def get_employee_by_user_id(self, user_id: str) -> Dict[str, Any]:
-        if not user_id:
+    def list_namespace(self, namespace: tuple, limit: int = _SEARCH_ALL) -> List[Dict[str, Any]]:
+        """某个命名空间下的全部记录（含多段前缀的，如 ("stock", "M100023")）。"""
+        return self.search_items_to_dict_list(self.store.search(namespace, limit=limit))
+
+    # ==================== 操作员 ====================
+    @debug
+    def get_operator_by_id(self, operator_id: str) -> Dict[str, Any]:
+        if not operator_id:
             return {}
-        item = self.store.get(("employee",), user_id)
-        return self.item2dict(item)
+        return self.get_item(("operator",), operator_id)
 
     @debug
-    def list_all_employee(self) -> List[Dict[str, Any]]:
-        namespace = ("employee",)
-        # ⚠️ 必须显式传 limit：search() 默认只返回 10 条，
-        #    不传的话数据一多就被静默截断（不报错，只是少了几条）
-        search_result = self.store.search(namespace, limit=_SEARCH_ALL)
-        return self.search_items_to_dict_list(search_result)
+    def list_all_operators(self) -> List[Dict[str, Any]]:
+        return self.list_namespace(("operator",))
 
-    # ==================== 标签信息 ====================
-
+    # ==================== 物料主数据 ====================
     @debug
-    def get_tags_setting_by_tag_id(self, tag_id: str) -> Dict[str, Any]:
-        if not tag_id:
+    def get_material(self, material_code: str) -> Dict[str, Any]:
+        if not material_code:
             return {}
-        item = self.store.get(("tags_setting",), tag_id)
-        return self.item2dict(item)
+        return self.get_item(("material",), material_code)
 
     @debug
-    def list_all_tags_setting(self) -> List[Dict[str, Any]]:
-        namespace = ("tags_setting",)
-        filter = {"deleted": False}
-        # ⚠️ 同样的问题：默认 limit=10 会把标签体系砍掉一大半，
-        #    后果是标签建议永远只在那 10 个里挑，且完全看不出哪里错了。
-        search_result = self.store.search(namespace, filter=filter, limit=_SEARCH_ALL)
-        return self.search_items_to_dict_list(search_result)
+    def list_all_materials(self) -> List[Dict[str, Any]]:
+        return self.list_namespace(("material",))
 
-
-    # ==================== 外部客户信息 ====================
+    # ==================== 供应商主数据 ====================
     @debug
-    def get_external_user_by_external_id(self, external_id: str, follow_user_id: str) -> Dict[str, Any]:
-        """根据external_id获取外部客户信息"""
-
-        if not external_id or not follow_user_id:
+    def get_supplier(self, supplier_code: str) -> Dict[str, Any]:
+        if not supplier_code:
             return {}
-
-        namespace = ("external_user", follow_user_id)
-        key = external_id
-        item = self.store.get(namespace, key)
-        return self.item2dict(item)
+        return self.get_item(("supplier",), supplier_code)
 
     @debug
-    def get_external_user_tag_by_external_id(self, external_id: str, follow_user_id: str) -> List[Dict[str, Any]]:
-        """根据external_id获取客户标签"""
+    def list_all_suppliers(self) -> List[Dict[str, Any]]:
+        return self.list_namespace(("supplier",))
 
-        external_user = self.get_external_user_by_external_id(external_id, follow_user_id)
-
-        tag_ids = external_user.get("tags", [])
-
-        tag_details = []
-        
-        for tag_id in tag_ids:
-            tag = self.get_tags_setting_by_tag_id(tag_id)
-            if tag: 
-                tag_details.append(tag)
-
-        return tag_details
-
+    # ==================== 仓库主数据 ====================
     @debug
-    def upsert_external_user_tag_by_external_id(self, external_id: str, follow_user_id: str, tag_ids: List[str]) -> bool:
-        """根据external_id获取客户标签"""
-
-        if not external_id or not follow_user_id:
-            return False
-
-        if not tag_ids:
-            tag_ids = []
-
-        external_user = self.get_external_user_by_external_id(external_id, follow_user_id)
-
-        if not external_user:
-            return False
-        
-        external_user["tags"] = tag_ids
-
-        namespace = ("external_user", follow_user_id)
-        key = external_id
-        self.store.put(namespace, key, external_user)
-
-
-        return True
-
-    @debug
-    def get_profile_by_external_id(self, external_id: str, follow_user_id: str) -> Dict[str, Any]:
-        """根据external_id获取客户画像"""
-
-        if not external_id or not follow_user_id:
+    def get_warehouse(self, warehouse_code: str) -> Dict[str, Any]:
+        if not warehouse_code:
             return {}
-
-        namespace = ("external_user_profile", follow_user_id)
-        key = external_id
-        item = self.store.get(namespace, key)
-        return self.item2dict(item)
+        return self.get_item(("warehouse",), warehouse_code)
 
     @debug
-    def upsert_external_user_profile(self, external_id: str, follow_user_id: str, profile: Dict[str, Any]) -> bool:
-        """更新外部客户信息"""
+    def list_all_warehouses(self) -> List[Dict[str, Any]]:
+        return self.list_namespace(("warehouse",))
 
-        if not external_id or not follow_user_id:
-            return False
-
-        namespace = ("external_user_profile", follow_user_id)
-        key = external_id
-        self.store.put(namespace, key, profile)
-        
-        return True
-
-    # ==================== 聊天消息信息 ====================
+    # ==================== 库存（两个视角） ====================
     @debug
-    def list_last_wxqy_msg(self, external_id: str, follow_user_id: str, after_yyyy_mm_dd: Optional[str] = None, limit: Optional[int] = 100) -> List[Dict[str, Any]]:
-        """获取近期聊天消息内容信息，支持过滤条件"""
+    def list_all_stock(self) -> List[Dict[str, Any]]:
+        """全部库存点。写入时按物料分命名空间，所以这里是跨命名空间的前缀查询。"""
+        return self.list_namespace(("stock",))
 
-        if not external_id or not follow_user_id:
+    @debug
+    def list_stock_by_material(self, material_code: str) -> List[Dict[str, Any]]:
+        """某个物料在各仓库的库存分布。"""
+        if not material_code:
             return []
+        return self.list_namespace(("stock", material_code))
 
-        from_to_sorted_key = "".join(sorted([external_id, follow_user_id]))
-        namespace = ("wxqy_msg", from_to_sorted_key)
-        if after_yyyy_mm_dd:
-            filter = {"YYYYMMDD": {"$gte": after_yyyy_mm_dd}}
-        else:
-            filter = {}
-        search_result = self.store.search(namespace, filter=filter, limit=limit)
-        return self.search_items_to_dict_list(search_result)
-
-
-    # ==================== 微信客服信息 ====================
     @debug
-    def list_last_wxkf_msg(self, external_id: str, after_yyyy_mm_dd: Optional[str] = None, limit: Optional[int] = 100) -> List[Dict[str, Any]]:
-        """获取近期微信客服信息，支持过滤条件"""
-
-        if not external_id:
+    def list_stock_by_warehouse(self, warehouse_code: str) -> List[Dict[str, Any]]:
+        """某个仓库里各物料（盘点视角）。"""
+        if not warehouse_code:
             return []
+        return self.list_namespace(("stock_wh", warehouse_code))
 
-        namespace = ("wxkf_msg", external_id)
-        if after_yyyy_mm_dd:
-            filter = {"YYYYMMDD": {"$gte": after_yyyy_mm_dd}}
-        else:
-            filter = {}
-        search_result = self.store.search(namespace, filter=filter, limit=limit)
-        return self.search_items_to_dict_list(search_result)
-
-
-    # ==================== 客户订单信息 ====================
+    # ==================== 报价 ====================
     @debug
-    def list_wxxd_order_by_union_id(self, union_id: str, after_yyyy_mm_dd: Optional[str] = None, limit: Optional[int] = 100) -> List[Dict[str, Any]]:
-        """根据union_id获取客户订单信息列表"""
-
-        if not union_id:
+    def list_quotes_by_material(self, material_code: str) -> List[Dict[str, Any]]:
+        """某个物料的各家供应商报价（比价的输入）。"""
+        if not material_code:
             return []
+        return self.list_namespace(("quote", material_code))
 
-        namespace = ("wxxd_order", union_id)
+    @debug
+    def get_quote(self, material_code: str, supplier_code: str) -> Dict[str, Any]:
+        if not material_code or not supplier_code:
+            return {}
+        return self.get_item(("quote", material_code), supplier_code)
 
-        if after_yyyy_mm_dd:
-            filter = {"YYYYMMDD": {"$gte": after_yyyy_mm_dd}}
-        else:
-            filter = {}
+    # ==================== 采购订单 ====================
+    @debug
+    def get_purchase_order(self, po_no: str) -> Dict[str, Any]:
+        if not po_no:
+            return {}
+        return self.get_item(("purchase_order",), po_no)
 
-        search_result = self.store.search(namespace, filter=filter, limit=limit)
-        return self.search_items_to_dict_list(search_result)
+    @debug
+    def list_all_purchase_orders(self, limit: int = _SEARCH_ALL) -> List[Dict[str, Any]]:
+        return self.list_namespace(("purchase_order",), limit=limit)
+
+    # ==================== 收货单 ====================
+    @debug
+    def list_all_receipts(self, limit: int = _SEARCH_ALL) -> List[Dict[str, Any]]:
+        return self.list_namespace(("receipt",), limit=limit)
+
+    # ==================== 需求计划 ====================
+    @debug
+    def list_all_demands(self) -> List[Dict[str, Any]]:
+        return self.list_namespace(("demand",))

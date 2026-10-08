@@ -1,8 +1,42 @@
+"""
+数据装载节点（7 个，直线串行）。
+
+为什么要在意图识别之前把数据全查出来
+------------------------------------
+两句话：**统一状态模型汇多源数据**，以及**把「取数」与「用数」分开**。
+
+* 子图只读状态，不各自查库 —— 子图因此是「给定状态必有确定输出」的纯逻辑，
+  演示时每一步都能解释数字从哪来，测试也能只喂状态不给 store。
+* 换了数据源（mock → 真实 WMS/ERP 接口），改装载节点即可，子图一行不动；
+  反过来，如果每个子图自己查库，换数据源要去五个地方改。
+
+7 个节点刻意拆开而不是合成一个函数：状态里多了一个数据域、
+执行轨迹里多一行、工作台时间线上多一个阶段 —— 「汇了哪些源」是看得见的。
+
+装载失败**不**中断主流程：该域返回空值 + 一条 code=1 的 node_result，
+子图对空状态有明确分支（如实告知「这个数据没查到」），
+比整条链路 500 更符合业务系统的行为。
+"""
+
 from langchain_core.runnables import RunnableConfig
-from graphs.scm_graph.scm_state import ScmState, ScmStateField
-from tools.store_tool import get_tag_setting, get_customer_info, get_chat_history, get_kf_history, get_order_history, get_customer_profile, get_customer_tags, get_employee_info
-from graphs.scm_graph.scm_state import ConfigurableField
-from models.scm_models import TagSetting, CustomerInfo, CustomerProfile, OrderHistory, KFChatHistory, ChatHistory, CustomerTags, NodeResult, EmployeeInfo
+from graphs.scm_graph.scm_state import ScmState, ScmStateField, ConfigurableField
+from tools.store_tool import (
+    get_materials,
+    get_operator_info,
+    get_purchase_orders,
+    get_stock_items,
+    get_suppliers,
+    get_warehouses,
+)
+from models.scm_models import (
+    MaterialInfo,
+    NodeResult,
+    OperatorInfo,
+    PurchaseOrderInfo,
+    StockItem,
+    SupplierInfo,
+    WarehouseInfo,
+)
 from utils.agent_logger import get_logger
 from enum import Enum
 
@@ -10,267 +44,141 @@ logger = get_logger("scm_node_load_data")
 
 class NodeName(str, Enum):
     LOAD_WELCOME_MESSAGE    = "load_welcome_message_node"
-    LOAD_EMPLOYEE_INFO      = "load_employee_info_node"
-    LOAD_TAG_SETTING        = "load_tag_setting_node"
-    LOAD_CUSTOMER_INFO      = "load_customer_info_node"
-    LOAD_CHAT_HISTORY       = "load_chat_history_node"
-    LOAD_KF_CHAT_HISTORY    = "load_kf_chat_history_node"
-    LOAD_ORDER_HISTORY      = "load_order_history_node"
+    LOAD_OPERATOR_INFO      = "load_operator_info_node"
+    LOAD_MATERIALS          = "load_materials_node"
+    LOAD_SUPPLIERS          = "load_suppliers_node"
+    LOAD_WAREHOUSES         = "load_warehouses_node"
+    LOAD_STOCK              = "load_stock_node"
+    LOAD_PURCHASE_ORDERS    = "load_purchase_orders_node"
 
-def load_welcome_message_node(state: ScmState, config: RunnableConfig):
-    """欢迎信息节点"""
-    
-    logger.info("=== 欢迎信息 ===")
-    
+
+def _loaded(node: NodeName, field: ScmStateField, value, message: str):
+    """成功装载的返回结构。"""
     return {
+        field: value,
         ScmStateField.NODE_RESULT: [NodeResult(
-            execute_node_name=NodeName.LOAD_WELCOME_MESSAGE.value,
+            execute_node_name=node.value,
             execute_result_code=0,
-            execute_result_msg="正在为您加载数据，请稍等。",
+            execute_result_msg=message,
             execute_exceptions=[]
         )]
     }
 
-def load_employee_info_node(state: ScmState, config: RunnableConfig):
-    """加载员工信息节点"""
-    
-    logger.info("=== 加载员工信息 ===")
+
+def _failed(node: NodeName, field: ScmStateField, fallback, message: str, error: Exception):
+    """装载失败的返回结构：空值 + code=1，不抛。"""
+    logger.error(f"{message}: {error}")
+    return {
+        field: fallback,
+        ScmStateField.NODE_RESULT: [NodeResult(
+            execute_node_name=node.value,
+            execute_result_code=1,
+            execute_result_msg=message,
+            execute_exceptions=[str(error)]
+        )]
+    }
+
+
+def load_welcome_message_node(state: ScmState, config: RunnableConfig):
+    """欢迎信息节点"""
+
+    logger.info("=== 欢迎信息 ===")
+
+    return {
+        ScmStateField.NODE_RESULT: [NodeResult(
+            execute_node_name=NodeName.LOAD_WELCOME_MESSAGE.value,
+            execute_result_code=0,
+            execute_result_msg="正在为您加载业务数据，请稍等。",
+            execute_exceptions=[]
+        )]
+    }
+
+
+def load_operator_info_node(state: ScmState, config: RunnableConfig):
+    """加载操作员信息节点"""
+
+    logger.info("=== 加载操作员信息 ===")
 
     user_id = config[ConfigurableField.configurable][ConfigurableField.user_id]
 
-    logger.info(f"user_id: {user_id}")
+    try:
+        operator_info: OperatorInfo = get_operator_info(user_id=user_id)
+        return _loaded(NodeName.LOAD_OPERATOR_INFO, ScmStateField.OPERATOR_INFO,
+                       operator_info, f"完成操作员信息加载（{operator_info.name or user_id}）")
+    except Exception as e:
+        return _failed(NodeName.LOAD_OPERATOR_INFO, ScmStateField.OPERATOR_INFO,
+                       OperatorInfo(), "加载操作员信息失败", e)
+
+
+def load_materials_node(state: ScmState, config: RunnableConfig):
+    """加载物料主数据节点"""
+
+    logger.info("=== 加载物料主数据 ===")
 
     try:
-        employee_info: EmployeeInfo = get_employee_info(user_id = user_id)
-        logger.info(f"员工信息: {employee_info}")
-        
-        return {
-            ScmStateField.EMPLOYEE_INFO: employee_info,
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_EMPLOYEE_INFO.value,
-                execute_result_code=0,
-                execute_result_msg="完成员工信息加载",
-                execute_exceptions=[]
-            )]
-        }
+        materials = get_materials()
+        return _loaded(NodeName.LOAD_MATERIALS, ScmStateField.MATERIALS,
+                       materials, f"完成物料主数据加载（{len(materials)} 条）")
     except Exception as e:
-        logger.error(f"加载员工信息失败: {e}")
-        return {
-            ScmStateField.EMPLOYEE_INFO: EmployeeInfo(),
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_EMPLOYEE_INFO.value,
-                execute_result_code=1,
-                execute_result_msg="加载员工信息失败",
-                execute_exceptions=[str(e)]
-            )]
-        }
+        return _failed(NodeName.LOAD_MATERIALS, ScmStateField.MATERIALS,
+                       [], "加载物料主数据失败", e)
 
-def load_tag_setting_node(state: ScmState, config: RunnableConfig):
-    """加载标签设置节点"""
-    
-    logger.info("=== 加载标签设置 ===")
-    
-    # 直接调用工具函数，传递配置
+
+def load_suppliers_node(state: ScmState, config: RunnableConfig):
+    """加载供应商主数据节点"""
+
+    logger.info("=== 加载供应商主数据 ===")
+
     try:
-        tag_setting: TagSetting = get_tag_setting()
-        logger.info(f"标签设置: {tag_setting}")
-        
-        return {
-            ScmStateField.TAG_SETTING: tag_setting,
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_TAG_SETTING.value,
-                execute_result_code=0,
-                execute_result_msg="完成标签设置加载",
-                execute_exceptions=[]
-            )]
-        }
+        suppliers = get_suppliers()
+        return _loaded(NodeName.LOAD_SUPPLIERS, ScmStateField.SUPPLIERS,
+                       suppliers, f"完成供应商主数据加载（{len(suppliers)} 条）")
     except Exception as e:
-        logger.error(f"加载标签设置失败: {e}")
-        return {
-            ScmStateField.TAG_SETTING: TagSetting(),
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_TAG_SETTING.value,
-                execute_result_code=1,
-                execute_result_msg="加载标签设置失败",
-                execute_exceptions=[str(e)]
-            )]
-        }
+        return _failed(NodeName.LOAD_SUPPLIERS, ScmStateField.SUPPLIERS,
+                       [], "加载供应商主数据失败", e)
 
 
-def load_customer_info_node(state: ScmState, config: RunnableConfig):
-    """加载客户信息节点"""
-    
-    logger.info("=== 加载客户信息 ===")
-    
-    follow_user_id = config[ConfigurableField.configurable][ConfigurableField.user_id]
-    external_id    = config[ConfigurableField.configurable][ConfigurableField.external_id]
-    
-    logger.info(f"follow_user_id: {follow_user_id}")
-    logger.info(f"external_id: {external_id}")
-    
-    # 直接调用工具函数，传递配置
+def load_warehouses_node(state: ScmState, config: RunnableConfig):
+    """加载仓库主数据节点"""
+
+    logger.info("=== 加载仓库主数据 ===")
+
     try:
-        customer_info: CustomerInfo       = get_customer_info(external_id = external_id, follow_user_id = follow_user_id)
-        customer_profile: CustomerProfile = get_customer_profile(external_id = external_id, follow_user_id = follow_user_id)
-        customer_tags: CustomerTags       = get_customer_tags(external_id = external_id, follow_user_id = follow_user_id)
-
-        logger.debug(f"客户信息: {customer_info}")
-        logger.debug(f"客户画像: {customer_profile}")
-        logger.debug(f"客户标签: {customer_tags}")
-        
-        return {
-            ScmStateField.CUSTOMER_INFO: customer_info,
-            ScmStateField.CUSTOMER_PROFILE: customer_profile,
-            ScmStateField.CUSTOMER_TAGS: customer_tags,
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_CUSTOMER_INFO.value,
-                execute_result_code=0,
-                execute_result_msg="完成客户信息加载",
-                execute_exceptions=[]
-            )]
-        }
+        warehouses = get_warehouses()
+        return _loaded(NodeName.LOAD_WAREHOUSES, ScmStateField.WAREHOUSES,
+                       warehouses, f"完成仓库主数据加载（{len(warehouses)} 条）")
     except Exception as e:
-        logger.error(f"加载客户信息失败: {e}")
-        return {
-            ScmStateField.CUSTOMER_INFO: CustomerInfo(),
-            ScmStateField.CUSTOMER_PROFILE: CustomerProfile(),
-            ScmStateField.CUSTOMER_TAGS: [],
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_CUSTOMER_INFO.value,
-                execute_result_code=1,
-                execute_result_msg="加载客户信息失败",
-                execute_exceptions=[str(e)]
-            )]
-        }
+        return _failed(NodeName.LOAD_WAREHOUSES, ScmStateField.WAREHOUSES,
+                       [], "加载仓库主数据失败", e)
 
 
-def load_chat_history_node(state: ScmState, config: RunnableConfig):
-    """加载聊天消息节点"""
-    
-    logger.info("=== 加载聊天消息 ===")
+def load_stock_node(state: ScmState, config: RunnableConfig):
+    """加载库存快照节点"""
 
-    follow_user_id = config[ConfigurableField.configurable][ConfigurableField.user_id]
-    external_id    = config[ConfigurableField.configurable][ConfigurableField.external_id]
-    
-    logger.info(f"follow_user_id: {follow_user_id}")
-    logger.info(f"external_id: {external_id}")
-    
+    logger.info("=== 加载库存快照 ===")
 
-    # 直接调用工具函数，传递配置
     try:
-        chat_history = get_chat_history(external_id = external_id,follow_user_id = follow_user_id)
-        logger.debug(f"聊天消息: {chat_history}")
-        
-        return {
-            ScmStateField.CHAT_HISTORY: chat_history,
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_CHAT_HISTORY.value,
-                execute_result_code=0,
-                execute_result_msg="完成聊天消息加载",
-                execute_exceptions=[]
-            )]
-        }
+        stock_items = get_stock_items()
+        below = sum(1 for s in stock_items if s.below_safety)
+        return _loaded(NodeName.LOAD_STOCK, ScmStateField.STOCK_ITEMS,
+                       stock_items,
+                       f"完成库存快照加载（{len(stock_items)} 个库存点，{below} 个低于安全线）")
     except Exception as e:
-        logger.error(f"加载聊天消息失败: {e}")
-        
-        return {
-            ScmStateField.CHAT_HISTORY: ChatHistory(),
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_CHAT_HISTORY.value,
-                execute_result_code=1,
-                execute_result_msg="加载聊天消息失败",
-                execute_exceptions=[str(e)]
-            )]
-        }
+        return _failed(NodeName.LOAD_STOCK, ScmStateField.STOCK_ITEMS,
+                       [], "加载库存快照失败", e)
 
 
-def load_kf_chat_history_node(state: ScmState, config: RunnableConfig):
-    """加载微信客服信息节点"""
-    
-    logger.info("=== 加载微信客服信息 ===")
+def load_purchase_orders_node(state: ScmState, config: RunnableConfig):
+    """加载采购订单节点"""
 
-    external_id = config[ConfigurableField.configurable][ConfigurableField.external_id]
-    
-    logger.info(f"external_id: {external_id}")
-    
+    logger.info("=== 加载采购订单 ===")
 
-    # 直接调用工具函数，传递配置
     try:
-        kf_chat_history = get_kf_history(external_id = external_id)
-        logger.debug(f"微信客服信息: {kf_chat_history}")
-        
-        return {
-            ScmStateField.KF_CHAT_HISTORY: kf_chat_history,
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_KF_CHAT_HISTORY.value,
-                execute_result_code=0,
-                execute_result_msg="完成微信客服信息加载",
-                execute_exceptions=[]
-            )]
-        }
+        orders = get_purchase_orders()
+        in_transit = sum(1 for o in orders if o.status == "in_transit")
+        return _loaded(NodeName.LOAD_PURCHASE_ORDERS, ScmStateField.PURCHASE_ORDERS,
+                       orders,
+                       f"完成采购订单加载（{len(orders)} 条，{in_transit} 条在途）")
     except Exception as e:
-        logger.error(f"加载微信客服信息失败: {e}")
-        return {
-            ScmStateField.KF_CHAT_HISTORY: KFChatHistory(),
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_KF_CHAT_HISTORY.value,
-                execute_result_code=1,
-                execute_result_msg="加载微信客服信息失败",
-                execute_exceptions=[str(e)]
-            )]
-        }
-
-
-
-def load_order_history_node(state: ScmState, config: RunnableConfig):
-    """加载订单信息节点"""
-    
-    logger.info("=== 加载订单信息 ===")
-
-    follow_user_id = config[ConfigurableField.configurable][ConfigurableField.user_id]
-    external_id    = config[ConfigurableField.configurable][ConfigurableField.external_id]
-    
-    logger.info(f"follow_user_id: {follow_user_id}")
-    logger.info(f"external_id: {external_id}")
-    
-    customer_info: CustomerInfo = get_customer_info(external_id = external_id, follow_user_id = follow_user_id)
-
-    union_id = customer_info.union_id
-
-    # 直接调用工具函数，传递配置
-    try:
-
-        if not union_id:
-            return {
-                ScmStateField.ORDER_HISTORY: OrderHistory(),
-                ScmStateField.NODE_RESULT: [NodeResult(
-                    execute_node_name=NodeName.LOAD_ORDER_HISTORY.value,
-                    execute_result_code=1,
-                    execute_result_msg="没有获取到该客户的union_id",
-                    execute_exceptions=[f"客户信息中没有union_id"]
-                )]
-            }
-
-        order_history: OrderHistory = get_order_history(union_id = union_id)
-        logger.info(f"订单信息: {order_history}")
-        
-        return {
-            ScmStateField.ORDER_HISTORY: order_history,
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_ORDER_HISTORY.value,
-                execute_result_code=0,
-                execute_result_msg="完成订单信息加载",
-                execute_exceptions=[]
-            )]
-        }
-    except Exception as e:
-        logger.error(f"加载订单信息失败: {e}")
-        return {
-            ScmStateField.ORDER_HISTORY: OrderHistory(),
-            ScmStateField.NODE_RESULT: [NodeResult(
-                execute_node_name=NodeName.LOAD_ORDER_HISTORY.value,
-                execute_result_code=1,
-                execute_result_msg="加载订单信息失败",
-                execute_exceptions=[str(e)]
-            )]
-        }
+        return _failed(NodeName.LOAD_PURCHASE_ORDERS, ScmStateField.PURCHASE_ORDERS,
+                       [], "加载采购订单失败", e)

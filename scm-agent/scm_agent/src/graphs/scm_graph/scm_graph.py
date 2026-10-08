@@ -1,19 +1,23 @@
 from langgraph.graph import START, END, StateGraph
 from graphs.scm_graph.scm_state import ScmState, InputState, OutputState, ScmConfig
 
-from graphs.scm_graph.sub_product_qa.sub_product_qa_graph import sub_product_qa_graph
-from graphs.scm_graph.sub_order_query.sub_order_query_graph import sub_order_query_graph
-from graphs.scm_graph.sub_after_sale.sub_after_sale_graph import sub_after_sale_graph
-from graphs.scm_graph.sub_weekly_report.sub_weekly_report_graph import sub_weekly_report_graph
-from graphs.scm_graph.sub_profile.sub_profile_graph import sub_profile_graph
-from graphs.scm_graph.sub_chat_suggestion.sub_chat_suggestion_graph import sub_chat_suggestion_graph
-from graphs.scm_graph.sub_kf_chat_suggestion.sub_kf_chat_suggestion_graph import sub_kf_chat_suggestion_graph
-from graphs.scm_graph.sub_tag.sub_tag_graph import sub_tag_graph
-from graphs.scm_graph.sub_schedule.sub_schedule_graph import sub_schedule_graph
+from graphs.scm_graph.sub_material_qa.sub_material_qa_graph import sub_material_qa_graph
+from graphs.scm_graph.sub_purchase_request.sub_purchase_request_graph import sub_purchase_request_graph
+from graphs.scm_graph.sub_goods_receipt.sub_goods_receipt_graph import sub_goods_receipt_graph
+from graphs.scm_graph.sub_inventory.sub_inventory_graph import sub_inventory_graph
+from graphs.scm_graph.sub_supplier.sub_supplier_graph import sub_supplier_graph
 from graphs.scm_graph.sub_talk.sub_talk_graph import sub_talk_graph
 from graphs.scm_graph.scm_node import NodeName, intent_detection, task_result_confirm, welcome_message, cleanup_state_node
 from graphs.scm_graph.scm_node_load_data import NodeName as LoadDataNodeName
-from graphs.scm_graph.scm_node_load_data import load_welcome_message_node, load_employee_info_node, load_tag_setting_node, load_customer_info_node, load_chat_history_node, load_kf_chat_history_node, load_order_history_node
+from graphs.scm_graph.scm_node_load_data import (
+    load_welcome_message_node,
+    load_operator_info_node,
+    load_materials_node,
+    load_suppliers_node,
+    load_warehouses_node,
+    load_stock_node,
+    load_purchase_orders_node,
+)
 
 import os
 from utils.env_loader import load_agent_env
@@ -34,60 +38,44 @@ builder.add_node(NodeName.WELCOME_MESSAGE.value, welcome_message) ## 欢迎消�
 builder.add_node(NodeName.INTENT_DETECTION.value, intent_detection) ## 意图检测
 builder.add_node(NodeName.TASK_RESULT_CONFIRM.value, task_result_confirm) ## 任务结果确认
 
-## 加载数据节点
-builder.add_node(LoadDataNodeName.LOAD_WELCOME_MESSAGE.value, load_welcome_message_node) ## 加载欢迎消息
-builder.add_node(LoadDataNodeName.LOAD_EMPLOYEE_INFO.value, load_employee_info_node) ## 加载员工信息
-builder.add_node(LoadDataNodeName.LOAD_TAG_SETTING.value, load_tag_setting_node) ## 加载标签设置
-builder.add_node(LoadDataNodeName.LOAD_CUSTOMER_INFO.value, load_customer_info_node) ## 加载客户信息
-builder.add_node(LoadDataNodeName.LOAD_CHAT_HISTORY.value, load_chat_history_node) ## 加载聊天消息
-builder.add_node(LoadDataNodeName.LOAD_KF_CHAT_HISTORY.value, load_kf_chat_history_node) ## 加载微信客服信息
-builder.add_node(LoadDataNodeName.LOAD_ORDER_HISTORY.value, load_order_history_node) ## 加载订单信息
+## 加载数据节点（7 路，直线串行）
+builder.add_node(LoadDataNodeName.LOAD_WELCOME_MESSAGE.value, load_welcome_message_node) ## 欢迎语
+builder.add_node(LoadDataNodeName.LOAD_OPERATOR_INFO.value, load_operator_info_node) ## 操作员信息
+builder.add_node(LoadDataNodeName.LOAD_MATERIALS.value, load_materials_node) ## 物料主数据
+builder.add_node(LoadDataNodeName.LOAD_SUPPLIERS.value, load_suppliers_node) ## 供应商主数据
+builder.add_node(LoadDataNodeName.LOAD_WAREHOUSES.value, load_warehouses_node) ## 仓库主数据
+builder.add_node(LoadDataNodeName.LOAD_STOCK.value, load_stock_node) ## 库存快照
+builder.add_node(LoadDataNodeName.LOAD_PURCHASE_ORDERS.value, load_purchase_orders_node) ## 采购订单
 
-## 生成建议节点
-builder.add_node(NodeName.PRODUCT_QA.value, sub_product_qa_graph) ## 商品咨询问答（RAG）
-builder.add_node(NodeName.ORDER_QUERY.value, sub_order_query_graph) ## 订单查询（多 API 编排）
-builder.add_node(NodeName.AFTER_SALE.value, sub_after_sale_graph) ## 售后处理（政策匹配 + HITL 审批 + 幂等）
-builder.add_node(NodeName.WEEKLY_REPORT.value, sub_weekly_report_graph) ## 数据周报（确定性算数 + 模型只写摘要）
-builder.add_node(NodeName.CHAT_SUGGESTION.value, sub_chat_suggestion_graph) ## 生成客户聊天建议
-builder.add_node(NodeName.KF_CHAT_SUGGESTION.value, sub_kf_chat_suggestion_graph) ## 生成客服聊天建议
-builder.add_node(NodeName.TAG_SUGGESTION.value, sub_tag_graph) ## 生成客户标签
-builder.add_node(NodeName.PROFILE_SUGGESTION.value, sub_profile_graph) ## 生成客户画像
-builder.add_node(NodeName.SCHEDULE_SUGGESTION.value, sub_schedule_graph) ## 生成客户日程
+## 业务子图节点
+builder.add_node(NodeName.MATERIAL_QA.value, sub_material_qa_graph) ## 物料与制度问答（RAG + 图谱双通道）
+builder.add_node(NodeName.PURCHASE_REQUEST.value, sub_purchase_request_graph) ## 采购申请（策略 + HITL 审批 + 幂等）
+builder.add_node(NodeName.GOODS_RECEIPT.value, sub_goods_receipt_graph) ## 收货验收（质检 + 超阈值复核）
+builder.add_node(NodeName.INVENTORY_QUERY.value, sub_inventory_graph) ## 库存管理（多仓分布 / 安全库存）
+builder.add_node(NodeName.SUPPLIER_QUERY.value, sub_supplier_graph) ## 供应商管理（比价 / 履约评分）
 builder.add_node(NodeName.NO_CLEAR_INTENTION.value, sub_talk_graph) ## 未明确意图
 
 ## 加载数据节点执行完成后，调用意图检测节点
 builder.add_edge(START, NodeName.CLEANUP_STATE.value)
 builder.add_edge(NodeName.CLEANUP_STATE.value, NodeName.WELCOME_MESSAGE.value)
 builder.add_edge(NodeName.WELCOME_MESSAGE.value, LoadDataNodeName.LOAD_WELCOME_MESSAGE.value)
-builder.add_edge(LoadDataNodeName.LOAD_WELCOME_MESSAGE.value, LoadDataNodeName.LOAD_EMPLOYEE_INFO.value)
-builder.add_edge(LoadDataNodeName.LOAD_EMPLOYEE_INFO.value, LoadDataNodeName.LOAD_TAG_SETTING.value)
-builder.add_edge(LoadDataNodeName.LOAD_TAG_SETTING.value, LoadDataNodeName.LOAD_CUSTOMER_INFO.value)
-builder.add_edge(LoadDataNodeName.LOAD_CUSTOMER_INFO.value, LoadDataNodeName.LOAD_CHAT_HISTORY.value)
-builder.add_edge(LoadDataNodeName.LOAD_CHAT_HISTORY.value, LoadDataNodeName.LOAD_KF_CHAT_HISTORY.value)
-builder.add_edge(LoadDataNodeName.LOAD_KF_CHAT_HISTORY.value, LoadDataNodeName.LOAD_ORDER_HISTORY.value)
-builder.add_edge(LoadDataNodeName.LOAD_ORDER_HISTORY.value, NodeName.INTENT_DETECTION.value)
+builder.add_edge(LoadDataNodeName.LOAD_WELCOME_MESSAGE.value, LoadDataNodeName.LOAD_OPERATOR_INFO.value)
+builder.add_edge(LoadDataNodeName.LOAD_OPERATOR_INFO.value, LoadDataNodeName.LOAD_MATERIALS.value)
+builder.add_edge(LoadDataNodeName.LOAD_MATERIALS.value, LoadDataNodeName.LOAD_SUPPLIERS.value)
+builder.add_edge(LoadDataNodeName.LOAD_SUPPLIERS.value, LoadDataNodeName.LOAD_WAREHOUSES.value)
+builder.add_edge(LoadDataNodeName.LOAD_WAREHOUSES.value, LoadDataNodeName.LOAD_STOCK.value)
+builder.add_edge(LoadDataNodeName.LOAD_STOCK.value, LoadDataNodeName.LOAD_PURCHASE_ORDERS.value)
+builder.add_edge(LoadDataNodeName.LOAD_PURCHASE_ORDERS.value, NodeName.INTENT_DETECTION.value)
 
-## 意图检测后，根据意图调用对应的子图：
-## 1. 如果意图是商品咨询，则调用sub_product_qa_graph
-## 2. 如果意图是客户聊天建议，则调用sub_chat_suggestion_graph
-## 3. 如果意图是客服聊天建议，则调用sub_kf_chat_suggestion_graph
-## 4. 如果意图是客户标签，则调用sub_tag_graph
-## 5. 如果意图是客户画像，则调用sub_profile_graph
-## 6. 如果意图是客户日程，则调用sub_schedule_graph
-## 7. 如果意图是未明确意图，则调用sub_talk_graph
-## 子图执行完成后，调用NodeName.TASK_RESULT_CONFIRM节点
+## 意图检测后按意图路由到对应子图（枚举直达 / 语义 / 兜底三层，见 scm_node.py）；
+## 六个子图执行完成后统一到 task_result_confirm 收尾。
 
-
-builder.add_edge(NodeName.PRODUCT_QA.value,          NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.ORDER_QUERY.value,         NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.AFTER_SALE.value,          NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.WEEKLY_REPORT.value,       NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.CHAT_SUGGESTION.value,     NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.KF_CHAT_SUGGESTION.value,  NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.TAG_SUGGESTION.value,      NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.PROFILE_SUGGESTION.value,  NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.SCHEDULE_SUGGESTION.value, NodeName.TASK_RESULT_CONFIRM.value)
-builder.add_edge(NodeName.NO_CLEAR_INTENTION.value,  NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.MATERIAL_QA.value,        NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.PURCHASE_REQUEST.value,   NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.GOODS_RECEIPT.value,      NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.INVENTORY_QUERY.value,    NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.SUPPLIER_QUERY.value,     NodeName.TASK_RESULT_CONFIRM.value)
+builder.add_edge(NodeName.NO_CLEAR_INTENTION.value, NodeName.TASK_RESULT_CONFIRM.value)
 builder.add_edge(NodeName.TASK_RESULT_CONFIRM.value, END)
 
 def _get_callbacks():

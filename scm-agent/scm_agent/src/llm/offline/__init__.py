@@ -11,8 +11,6 @@ from llm.offline import lexicons  # noqa: F401
 
 # 业务合成器：import 即注册
 from llm.offline import synth_core  # noqa: F401
-from llm.offline import synth_ecom  # noqa: F401
-from llm.offline import synth_ops  # noqa: F401
 from llm.offline import synth_scm  # noqa: F401
 
 __all__ = [
@@ -20,7 +18,5 @@ __all__ = [
     "prompt_view",
     "lexicons",
     "synth_core",
-    "synth_ecom",
-    "synth_ops",
     "synth_scm",
 ]

@@ -127,6 +127,63 @@ def build_plan_id(order_id: str, action_type: str) -> str:
     return uuid.uuid5(_PLAN_NAMESPACE, build_key(order_id, action_type)).hex[:16]
 
 
+def _short_digest(*parts: Any) -> str:
+    """业务要素压成 6 位大写十六进制 —— 单号里的「同一笔」判据就靠它。"""
+    joined = ":".join(str(p) for p in parts)
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:6].upper()
+
+
+def build_request_id(
+    material_code: str,
+    qty: float,
+    target_warehouse: str,
+    operator_id: str,
+    *,
+    when: Optional[datetime] = None,
+) -> str:
+    """确定性采购申请单号：`PR + 日期 + 6 位哈希`。
+
+    为什么单号也要确定性
+    --------------------
+    单号是采购链路的幂等锚点（plan_id 由它再 uuid5 一层）。如果这里用
+    随机数或流水号，同一个申请重发一次就会得到两个单号、两张采购订单 ——
+    「重复提交」这个最常见的误操作就没有任何防线了。
+
+    哈希的四个输入就是采购申请的全部业务要素：**物料、数量、到货仓、提报人**。
+    改了其中任何一项都是另一笔申请，理应得到新单号；四项都没变就是同一笔，
+    落到同一个单号上由 `IdempotencyGuard` 兜住。
+
+    日期进单号是业务惯例（人看单号就知道什么时候提的）。代价是跨天重放
+    会得到新单号 —— 这在演示尺度上无所谓，真实系统里同一笔申请也不会
+    跨越一天还没处理完。
+    """
+    digest = _short_digest(material_code, f"{qty:g}", target_warehouse, operator_id)
+    day = (when or datetime.now()).strftime("%Y%m%d")
+    return f"PR{day}{digest}"
+
+
+def build_receipt_id(
+    po_no: str,
+    qty_received: int,
+    qty_defect: int,
+    *,
+    when: Optional[datetime] = None,
+) -> str:
+    """确定性收货单号：`RC + 日期 + 6 位哈希`。
+
+    与采购申请同一个设计：**单号是幂等锚点**，随机流水号会让同一次到货登记
+    重复提交时产生两张收货单，而「多登记一次入库」比「多下一单」更难被发现
+    （账实不符要等盘点才暴露）。
+
+    哈希输入取「订单 + 实收 + 不良」三项：同一张采购订单的同一次到货，
+    三项都没变就是同一笔；数量改了（比如补录漏记的 20 件）是另一笔登记，
+    理应得到新单号，由人工去看两张单是不是同一批货。
+    """
+    digest = _short_digest(po_no, qty_received, qty_defect)
+    day = (when or datetime.now()).strftime("%Y%m%d")
+    return f"RC{day}{digest}"
+
+
 def request_hash(payload: Dict[str, Any]) -> str:
     """把请求内容压成一个稳定的指纹。
 

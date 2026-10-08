@@ -3,22 +3,21 @@
 
 为什么需要它
 ------------
-图里的节点全部通过 store 读业务数据（员工、客户、标签、会话、订单）。离线跑
-demo 时 store 是空的，于是每个节点都返回空值 —— 「能跑通」但看不到任何业务
-产出。这个 loader 把**虚构但自洽**的种子数据灌进去，让全链路有真实内容可处理。
-当前并存两个业务域：电商客服（旧子图的过渡期数据）与供应链采购仓储（改造
-目标域，14 个种子文件）。改造收尾后电商域随旧子图一起下线。
+图里的节点全部通过 store 读业务数据（物料、供应商、仓库、库存、采购订单…）。
+离线跑 demo 时 store 是空的，于是每个节点都返回空值 —— 「能跑通」但看不到
+任何业务产出。这个 loader 把**虚构但自洽**的种子数据灌进去，让全链路有真实
+内容可处理。
 
-供应链域的种子不是「随手编几行」：跨文件有一组硬约束（外键、报价对、金额
-自洽、收货单指向），`verify_seed_data()` 在每次加载前全量核对，不通过就拒绝
-加载 —— demo 数字对不上比跑不起来更伤，见该函数的说明。
+种子不是「随手编几行」：跨文件有一组硬约束（外键、报价对、金额自洽、收货单
+指向），`verify_seed_data()` 在每次加载前全量核对，不通过就拒绝加载 ——
+demo 数字对不上比跑不起来更伤，见该函数的说明。
 
 时间为什么用相对偏移
 --------------------
 种子数据里写的是 `days_ago: 9` / `hours_ago: 5` 而不是 `2026-03-15 15:40`。
-如果写死绝对时间，周报里的「本周 / 上周」在你 clone 仓库一个月后就全空了，
-同环比会变成 0，demo 直接失去意义。改成加载时按当前时间回推，
-保证「最近一周有订单、最近几小时有对话」在任何时候都成立。
+如果写死绝对时间，「在途订单」「近 30 天出库」这类口径在你 clone 仓库一个月后
+就会全部过期，演示直接失去意义。改成加载时按当前时间回推，
+保证「有几单在途、最近有出库」在任何时候都成立。
 
 用法
 ----
@@ -123,125 +122,7 @@ def to_yyyymmdd(record: Dict[str, Any]) -> str:
     return moment.strftime("%Y%m%d") if moment else ""
 
 
-# ==================== 各类数据的写入 ====================
-
-def _load_employees(store: BaseStore) -> int:
-    data = _read_json("employees.json")
-    count = 0
-    for emp in data.get("employees", []):
-        user_id = emp.get("user_id")
-        if not user_id:
-            continue
-        store.put(("employee",), user_id, emp)
-        count += 1
-    return count
-
-
-def _load_tags(store: BaseStore) -> int:
-    data = _read_json("tags.json")
-    count = 0
-    for tag in data.get("tags", []):
-        tag_id = tag.get("tag_id")
-        if not tag_id:
-            continue
-        # deleted 必须显式写：list_all_tags_setting 的过滤条件是 {"deleted": False}
-        tag.setdefault("deleted", False)
-        store.put(("tags_setting",), tag_id, tag)
-        count += 1
-    return count
-
-
-def _load_customers(store: BaseStore) -> int:
-    data = _read_json("customers.json")
-    count = 0
-    for customer in data.get("customers", []):
-        external_id = customer.get("external_id")
-        follow_user_id = customer.get("follow_user_id")
-        if not external_id or not follow_user_id:
-            continue
-
-        # 基础信息：profile 单独放另一个命名空间，这里剔除掉
-        base = {k: v for k, v in customer.items() if k != "profile"}
-        base.setdefault("tags", [])
-        store.put(("external_user", follow_user_id), external_id, base)
-
-        # 画像
-        profile = customer.get("profile") or {}
-        if profile:
-            store.put(("external_user_profile", follow_user_id), external_id, profile)
-
-        count += 1
-    return count
-
-
-def _load_chats(store: BaseStore) -> int:
-    data = _read_json("chats.json")
-    count = 0
-
-    # 企业微信私聊
-    for i, msg in enumerate(data.get("wxqy_msgs", [])):
-        external_id = msg.get("external_id")
-        follow_user_id = msg.get("follow_user_id")
-        if not external_id or not follow_user_id:
-            continue
-
-        # ⚠️ 命名空间键必须是两个 id 排序后拼接 —— store_client 就是这么算的，
-        #    这里不一致的话消息写进去也读不出来。
-        namespace = ("wxqy_msg", "".join(sorted([external_id, follow_user_id])))
-        record = {
-            "from_id": msg.get("from_id", ""),
-            "content": msg.get("content", ""),
-            "msg_time": to_timestamp(msg),
-            "YYYYMMDD": to_yyyymmdd(msg),
-        }
-        store.put(namespace, f"msg-{i:04d}", record)
-        count += 1
-
-    # 微信客服会话
-    for i, msg in enumerate(data.get("wxkf_msgs", [])):
-        external_id = msg.get("external_id")
-        if not external_id:
-            continue
-
-        record = {
-            "external_id": external_id,
-            "content": msg.get("content", ""),
-            "origin": msg.get("origin", 3),
-            "msg_time": to_timestamp(msg),
-            "YYYYMMDD": to_yyyymmdd(msg),
-        }
-        store.put(("wxkf_msg", external_id), f"kf-{i:04d}", record)
-        count += 1
-
-    return count
-
-
-def _load_orders(store: BaseStore) -> int:
-    """把订单写进 `wxxd_order` 命名空间（图里的订单历史走这里）。"""
-    data = _read_json("orders.json")
-    count = 0
-    for i, order in enumerate(data.get("orders", [])):
-        union_id = order.get("union_id")
-        order_id = order.get("order_id")
-        if not union_id or not order_id:
-            continue
-
-        record = {
-            "order_id": order_id,
-            "order_products": [
-                item.get("product_name", "") for item in order.get("items", [])
-            ],
-            "order_amount": order.get("total_amount", 0.0),
-            "order_status": order.get("status_text", ""),
-            "order_create_time": to_timestamp(order),
-            "YYYYMMDD": to_yyyymmdd(order),
-        }
-        store.put(("wxxd_order", union_id), order_id, record)
-        count += 1
-    return count
-
-
-# ==================== 供应链域：装载 ====================
+# ==================== 装载 ====================
 # 命名空间约定（查询方按这个取数，逐一对应）：
 #   ("material",)                  key=material_code
 #   ("supplier",)                  key=supplier_code
@@ -555,12 +436,6 @@ def load_seed_data(store: Optional[BaseStore] = None,
             )
 
     stats = {
-        # ---- 电商客服域（旧子图过渡期数据，随 Phase 2 下线）----
-        "employee": _load_employees(store),
-        "tags_setting": _load_tags(store),
-        "external_user": _load_customers(store),
-        "chat_msg": _load_chats(store),
-        "order": _load_orders(store),
         # ---- 供应链采购仓储域 ----
         "material": _load_materials(store),
         "supplier": _load_suppliers(store),

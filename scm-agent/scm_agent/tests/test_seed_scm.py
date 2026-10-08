@@ -89,9 +89,6 @@ def test_load_counts_and_idempotence():
         "purchase_policy": 6, "quality_policy": 2,
     }.items() <= first.items()
 
-    # 过渡期：电商 5 键仍在（Phase 2 随旧子图下线时一并删除这两行）
-    assert {"employee", "tags_setting", "external_user", "chat_msg", "order"} <= set(first)
-
 
 def test_stock_written_in_both_namespaces():
     """库存写两份命名空间，两个视角必须都能查到、且是同一份数据。"""

@@ -110,8 +110,14 @@ def test_noncompliant_model_output_is_discarded_in_favor_of_restatement(knowledg
 
 
 def test_compliant_model_output_is_used_verbatim(knowledge_base):
-    """通过校验的模型输出照用 —— 闸门只拦编造，不拦润色。"""
-    model_text = "这款键盘是蓝牙 5.1 三模，共可记忆 3 台设备，通过组合键切换。"
+    """通过校验的模型输出照用 —— 闸门只拦编造，不拦润色。
+
+    模型文本从**本次检索到的事实**里拼出来（措辞自由组织，数字全部有依据），
+    这样换语料后依然成立：硬编一句「蓝牙 5.1」在语料没有商品页的那天就会
+    静默失效 —— 被拦的是它引用的数字，而测试还以为拦的是别的东西。
+    """
+    ranked = knowledge_base.search(QUESTION)
+    model_text = "据资料，" + restate_from_facts(QUESTION, ranked)
     answer = knowledge_base.ask(QUESTION, model_text=model_text)
 
     assert answer.answer == model_text
