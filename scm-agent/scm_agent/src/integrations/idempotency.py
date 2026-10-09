@@ -1,28 +1,29 @@
 """
 幂等保护。
 
-退款是这个系统里唯一**会把钱花出去**的操作，而它的触发路径恰好都很容易重复：
+下达采购订单、登记收货入库是这个系统里唯二**会改变真金白银和库存账**的操作，
+而它们的触发路径恰好都很容易重复：
 
-  * 客户连点两下「申请退款」；
-  * HITL 的 `interrupt()` 在 resume 时会**从节点第一行重放**，退款执行节点
-    如果在中断之前，一次审批就会退两次；
+  * 申请人在工作台上连点两下「提交申购」；
+  * HITL 的 `interrupt()` 在 resume 时会**从节点第一行重放**，如果下单/入库的
+    执行代码写在中断之前，一次审批就会执行两次；
   * 前端 SSE 断线重连，同一个请求又发了一遍。
 
 三重防护，各管一段
 ------------------
-1. **plan_id 确定性生成**（`uuid5(order_id:action_type)`）：同一个「订单 + 动作」
+1. **plan_id 确定性生成**（`uuid5(biz_id:action_type)`）：同一个「业务单 + 动作」
    永远得到同一个 plan_id，不随调用次数变化。它是后面所有记录的锚点，
-   也让 recreate 循环收敛到同一单，而不是每轮生成一个新的。
-2. **本模块的 guard**：以 plan_id 为键记账。重复请求不再真的调下游，
+   也让 recreate 重报后的多轮审批收敛到同一个方案上，而不是每轮生成一个新的。
+2. **本模块的 guard**：以业务键为锚点记账。重复请求不再真的调下游，
    直接返回首次的结果并标记 `replayed`。
-3. **退款执行放在中断之后的独立节点**：中断前的节点会被重放，有副作用的代码
+3. **执行代码放在中断之后的独立节点**：中断前的节点会被重放，有副作用的代码
    绝不能放在那里。这一条是结构上的保证，不依赖 guard 是否正确。
 
 关于「hash 不同就抛冲突」
 ------------------------
-同一个订单 + 同一个动作，但金额或原因变了，这不是重放，是**另一个请求**。
-这时静默复用第一次的结果会出错（客户把 199 改成 199.99，我们按 199 退了，
-钱少了）；直接执行第二次也可能出错（可能是同一次诉求的重复提交，只是措辞变了）。
+同一个业务单 + 同一个动作，但金额、数量等要素变了，这不是重放，是**另一个请求**。
+这时静默复用第一次的结果会出错（数量从 3000 改成 5000，我们按 3000 下了单，
+货不够）；直接执行第二次也可能出错（可能是同一次申请的重复提交，只是要素抄错了）。
 两者都赌不起，所以拒绝并转人工 —— 冲突本身就是要人来判的信号。
 """
 
@@ -59,7 +60,7 @@ class IdempotencyConflict(RuntimeError):
         self.new_hash = new_hash
         super().__init__(
             f"业务键 {key} 已存在内容不同的请求（{first_hash[:8]} vs {new_hash[:8]}），"
-            f"拒绝执行以免重复退款"
+            f"拒绝执行，转人工判断"
         )
 
 
@@ -109,9 +110,9 @@ def _now() -> str:
 
 
 def build_key(order_id: str, action_type: str) -> str:
-    """业务键：`订单号:动作`。
+    """业务键：`业务单号:动作`。
 
-    刻意不含时间戳与随机数 —— 它要表达的正是「同一个订单的同一个动作」，
+    刻意不含时间戳与随机数 —— 它要表达的正是「同一个业务单的同一个动作」，
     带上时间就不再幂等了。
     """
     return f"{(order_id or '').strip()}:{(action_type or '').strip()}"
@@ -120,7 +121,7 @@ def build_key(order_id: str, action_type: str) -> str:
 def build_plan_id(order_id: str, action_type: str) -> str:
     """确定性方案 ID。
 
-    用 uuid5（基于名字的哈希）而不是 uuid4（随机）：同一个订单 + 动作
+    用 uuid5（基于名字的哈希）而不是 uuid4（随机）：同一个业务单 + 动作
     必须算得出同一个 ID，否则「查一下这单之前是不是处理过」就无从查起。
     长度取 16 位十六进制，够用且日志里读得清。
     """
@@ -224,7 +225,7 @@ class IdempotencyGuard:
             self.store.put(IDEMPOTENCY_NAMESPACE, record.key, record.to_value())
         except Exception as e:  # pragma: no cover
             # 写不进去是严重问题：这一次的幂等保护会失效。但直接抛异常会让
-            # 一次本来能成功的退款失败，所以记错误日志并继续 —— 由告警兜住。
+            # 一次本来能成功的新建动作失败，所以记错误日志并继续 —— 由告警兜住。
             logger.error(f"幂等记录写入失败，本次请求的幂等保护不生效：{e}")
 
     # ---------------------------------------------------------------- 主流程
@@ -272,7 +273,8 @@ class IdempotencyGuard:
         record.status = "done"
         record.result = dict(result or {})
         self._put(record)
-        logger.info(f"幂等记账：完成 {key} -> {record.result.get('refund_id') or '无单号'}")
+        number = record.result.get("po_no") or record.result.get("receipt_no") or "无单号"
+        logger.info(f"幂等记账：完成 {key} -> {number}")
         return record
 
     def fail(self, key: str, message: str) -> None:
@@ -286,15 +288,31 @@ class IdempotencyGuard:
 
     # ---------------------------------------------------------------- 审批去重
 
-    def record_approval(self, *, thread_id: str, plan_id: str,
-                        decision: str, operator: str = "") -> bool:
-        """记录人工审批结论。**首次写入生效**，之后的重复写入被忽略。
+    @staticmethod
+    def approval_key(thread_id: str, plan_id: str, revision: int = 0) -> str:
+        """审批记录的键：`线程:方案[:r轮次]`。
 
-        HITL 恢复时审批节点本身也在重放，所以它必须和退款节点一样是幂等的：
+        第 0 轮不带后缀（与历史记录保持兼容）；recreate 之后的轮次带 `:r{n}`。
+        「首写胜」是**同一轮内**的幂等（节点重放不重复记账），而不是跨轮次的
+        拦截 —— 改判重报本就该各记一笔，否则多轮结论合并成一条，
+        「首次通过率」（第 0 轮就通过的比例）就算不出来。
+        """
+        base = f"{thread_id}:{plan_id}"
+        return base if not revision else f"{base}:r{revision}"
+
+    def record_approval(self, *, thread_id: str, plan_id: str,
+                        decision: str, operator: str = "",
+                        revision: int = 0) -> bool:
+        """记录人工审批结论。**同一轮内首次写入生效**，之后的重复写入被忽略。
+
+        HITL 恢复时审批节点本身也在重放，所以它必须和执行节点一样是幂等的：
         第一次批准是批准，第二遍重放不应该产生第二条审批记录。
         返回 True 表示这次写入是首次（真的记了一笔）。
+
+        `decision` 取值：approved / rejected / recreated（recreate 是「改判重报」，
+        它同样是一轮审批的结论 —— 首次通过率正是靠它和 approved 的占比算的）。
         """
-        key = f"{thread_id}:{plan_id}"
+        key = self.approval_key(thread_id, plan_id, revision)
         if self.get_approval(key) is not None:
             logger.info(f"审批记录已存在，忽略重放：{key}")
             return False
@@ -305,6 +323,7 @@ class IdempotencyGuard:
                 "plan_id": plan_id,
                 "decision": decision,
                 "operator": operator,
+                "revision": revision,
                 "created_at": _now(),
             })
         except Exception as e:  # pragma: no cover

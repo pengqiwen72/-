@@ -284,6 +284,7 @@ class _scenario_env:
 def run_scenario(key: str, *, auto_yes: bool = False) -> int:
     """跑一个场景。返回退出码（0 成功）。"""
     from demo import DemoRunner, build_demo_graph
+    from store.store_provider import reset_fallback_store
 
     spec = SCENARIOS[key]
     repeat = int(spec.get("repeat", 1))
@@ -306,8 +307,16 @@ def run_scenario(key: str, *, auto_yes: bool = False) -> int:
     # 整个场景（含审批恢复）都跑在注入的环境里：中断-恢复之间故障不该消失，
     # 否则「审批通过后接口恢复了」会让降级分支看起来像是假的
     with _scenario_env(spec.get("env", {})):
-        # 跑多次时共用同一个 runner/图：幂等记录写在 store 里，
-        # 换一个图实例就换一个 store，短路也就无从谈起了
+        # 每个场景从一块干净的白板开始。幂等记录、审批记录都写在**进程级**
+        # 的兜底 store 里，而几个采购场景刻意用同一笔申请演示不同走向
+        # （批准 / 驳回 / 改判重报 —— 单号相同是设计，不是巧合）。不重置的话，
+        # 前一个场景真正下过的单会让后一个场景撞上「同号不同要素」的幂等冲突、
+        # 落进「转人工核实」——那是系统面对真实冲突时的正确行为，但不是这个
+        # 场景要讲的故事。
+        reset_fallback_store()
+
+        # 跑多次时共用同一个 runner/图：两次提交落在同一块 store 上，
+        # 幂等短路才有机会被观察到
         runner = DemoRunner(build_demo_graph())
 
         for index in range(1, repeat + 1):

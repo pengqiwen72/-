@@ -306,7 +306,11 @@ class PurchasePlan(ScmBaseModel):
     )
     status: str = Field(
         default="matched",
-        description="matched / pending_approval / approved / rejected / executed / replayed / conflict",
+        description="matched / pending_approval / approved / rejected / executed / replayed / conflict / failed",
+    )
+    revision: int = Field(
+        default=0,
+        description="审批轮次：recreate 按修改重报一次加一轮；审批记录按轮次各记一笔",
     )
     approved_by: str = Field(default="", description="审批人")
     replayed: bool = Field(default=False, description="是否命中了幂等（本次没有真的再下过单）")
@@ -367,7 +371,11 @@ class ReceiptPlan(ScmBaseModel):
     reason_trace: List[str] = Field(default_factory=list, description="逐条命中说明")
     status: str = Field(
         default="matched",
-        description="matched / pending_review / approved / rejected / executed / replayed / conflict",
+        description="matched / pending_review / approved / rejected / executed / replayed / conflict / failed",
+    )
+    revision: int = Field(
+        default=0,
+        description="复核轮次：recreate 按修改重报一次加一轮；复核记录按轮次各记一笔",
     )
     approved_by: str = Field(default="", description="复核人")
     inspector: str = Field(default="", description="登记人（质检员）")

@@ -178,6 +178,35 @@ def test_approval_record_is_written_only_once(guard):
     assert guard.record_approval(thread_id="thread-1", plan_id="plan-2", decision="approved") is True
 
 
+def test_approval_records_are_kept_per_revision(guard):
+    """改判重报的多轮结论各记一笔：第 0 轮不带后缀（兼容历史），之后带 `:r{n}`。
+
+    同一轮内仍是首写胜（节点重放不重复记账），但跨轮次的结论不能互相吞掉 ——
+    「首次通过率」（第 0 轮就通过的比例）正是靠两笔记录算出来的。
+    """
+    assert IdempotencyGuard.approval_key("t1", "p1") == "t1:p1"
+    assert IdempotencyGuard.approval_key("t1", "p1", 0) == "t1:p1"
+    assert IdempotencyGuard.approval_key("t1", "p1", 1) == "t1:p1:r1"
+
+    assert guard.record_approval(
+        thread_id="t1", plan_id="p1", decision="recreated", operator="OP002",
+    ) is True
+    assert guard.record_approval(
+        thread_id="t1", plan_id="p1", decision="approved", operator="OP002", revision=1,
+    ) is True
+    # 同一轮重放：不记第二笔
+    assert guard.record_approval(
+        thread_id="t1", plan_id="p1", decision="approved", operator="OP002", revision=1,
+    ) is False
+
+    first_round = guard.get_approval("t1:p1")
+    second_round = guard.get_approval("t1:p1:r1")
+    assert first_round["decision"] == "recreated"
+    assert first_round["revision"] == 0
+    assert second_round["decision"] == "approved"
+    assert second_round["revision"] == 1
+
+
 # ==================== 锚点的锚点：确定性业务单号 ====================
 
 def test_request_id_is_built_from_the_four_business_elements():
@@ -211,7 +240,9 @@ def test_receipt_id_is_built_from_the_order_and_the_counts():
 
 def test_resubmitting_the_same_request_creates_only_one_purchase_order(runner):
     """同一笔申购提交两次：只有一个采购单号，第二次明确标记为命中幂等。"""
-    request = "给 WH01 申购 3000kg 冷轧钢板 1.2mm"
+    # 显式指定 S001：不指定会走「自动选最低价」选中交期 2 天的供应商，
+    # 命中「交期过短需核实」而转入审批 —— 这条用例要的是免审批直采链路。
+    request = "给 WH01 申购 3000kg 冷轧钢板 1.2mm，指定 S001"
 
     first = runner.start(request)
     assert first.error is None

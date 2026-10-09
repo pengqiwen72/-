@@ -147,7 +147,7 @@ def test_no_clear_intention_reaches_the_talk_subgraph_with_the_input(runner):
     assert "供应链" in message or "可以帮你" in message, "兜底要说明自身能力边界"
 
 
-# ==================== 场景路由闸：16 条演示输入各归其位 ====================
+# ==================== 场景路由闸：17 条演示输入各归其位 ====================
 
 #: 场景 key -> 它应当落到的子图名。演示场景的「输入」是自然语言，
 #: 靠第二层语义路由分发 —— 词表一动就可能走错链路，所以在这里全部钉死。
@@ -164,6 +164,7 @@ SCENARIO_ROUTES = {
     "purchase_auto":        "purchase_request",
     "purchase_approval":    "purchase_request",
     "purchase_reject":      "purchase_request",
+    "purchase_recreate":    "purchase_request",
     "purchase_replay":      "purchase_request",
     "receipt_normal":       "goods_receipt",
     "receipt_quality":      "goods_receipt",

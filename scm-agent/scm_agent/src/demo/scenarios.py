@@ -92,26 +92,34 @@ SCENARIOS: dict[str, dict] = {
     # ---- 采购执行（HITL）----
     "purchase_auto": {
         "title": "采购申请（免审批自动下单）",
-        "input": "给 WH01 申购 3000kg 冷轧钢板 1.2mm",
-        "desc": "要素提取 → 金额在自动处理额度内 → 免审批直接下单；"
-                "申请单号由要素确定性生成。",
+        "input": "给 WH01 申购 3000kg 冷轧钢板 1.2mm，指定 S001",
+        "desc": "要素提取 → 按 S001 报价取价（5.80 元/公斤，同料均价 5.51）→ "
+                "数量在直采范围内 → 免审批直接下单；申请单号由要素确定性生成。",
     },
     "purchase_approval": {
-        "title": "采购申请（大额转人工审批）",
-        "input": "给 WH01 申购 10000kg 冷轧钢板 1.2mm，产线急用",
-        "desc": "金额越过审批线 → interrupt 等主管决定 → 批准后由独立的执行节点"
-                "下单；中断节点无副作用，所以重放不会重复下单。",
+        "title": "采购申请（新供应商转人工审批）",
+        "input": "给 WH01 申购 8000kg 冷轧钢板 1.2mm，指定 S012，产线急用",
+        "desc": "8000kg×5.60=44800 元命中「新供应商首单需审批」→ interrupt 等主管"
+                "决定 → 批准后由独立的执行节点下单；中断节点无副作用，所以重放不会重复下单。",
     },
     "purchase_reject": {
         "title": "采购申请（审批驳回）",
-        "input": "给 WH01 申购 10000kg 冷轧钢板 1.2mm，产线急用",
-        "desc": "同一条大额申请，这次审批给出驳回：方案标记 rejected，"
+        "input": "给 WH01 申购 8000kg 冷轧钢板 1.2mm，指定 S012，产线急用",
+        "desc": "同一条新供应商申请，这次审批给出驳回：方案标记 rejected，"
                 "执行节点不做任何写操作，如实告知申请人。",
         "decisions": ["discard"],
     },
+    "purchase_recreate": {
+        "title": "采购申请（改判重报，免审批下单）",
+        "input": "给 WH01 申购 8000kg 冷轧钢板 1.2mm，指定 S012",
+        "desc": "审批不通过不是终点：用 recreate 把供应商改为 S001 重报 → 策略复判"
+                "不再命中审批条款 → 免审批直接下单。「驳回带修改重报」而不是"
+                "「从头再提一遍」，就是一次通过率指标背后的那条路。",
+        "decisions": [{"decision": "recreate", "patch": {"supplier_code": "S001"}}],
+    },
     "purchase_replay": {
         "title": "采购申请重复提交（幂等）",
-        "input": "给 WH01 申购 3000kg 冷轧钢板 1.2mm",
+        "input": "给 WH01 申购 3000kg 冷轧钢板 1.2mm，指定 S001",
         "desc": "同一诉求提交两次：第二次命中幂等记录后短路返回首次结果，"
                 "不会产生第二张采购订单。",
         "repeat": 2,
@@ -120,14 +128,18 @@ SCENARIOS: dict[str, dict] = {
     "receipt_normal": {
         "title": "收货验收（正常入库）",
         "input": "PO20260928002 到货了，实收 1000 支，没有发现问题",
-        "desc": "不良率 0% 在允许范围内 → 直接办理入库，不惊动人工。",
+        "desc": "不良率 0% 未命中 QC-001 → 直接办理入库，不惊动人工。",
     },
     "receipt_quality": {
         "title": "收货验收（不良率超阈值复核）",
         "input": "PO20260928002 到货 920 支，开箱抽检发现 30 支磕碰变形",
-        "desc": "不良率 3.26% 超过阈值 → interrupt 等质检复核 → 按结论决定"
-                "整批退货或让步接收；复核节点同样无副作用、可重放。",
-        "decisions": ["ok"],
+        "desc": "不良率 3.26% 命中 QC-001 → interrupt 等质检复核 → 复核人改判重报"
+                "（处置改为让步接收）→ 不良率是事实改不了、复判仍要复核 → "
+                "第二轮确认后按改后的处置执行。",
+        "decisions": [
+            {"decision": "recreate", "patch": {"disposition": "让步接收"}},
+            "ok",
+        ],
     },
     # ---- 兜底 ----
     "talk": {
@@ -144,7 +156,8 @@ DEFAULT_ORDER = [
     "material_qa", "material_qa_relation", "qa_miss", "qa_degraded", "load_degraded",
     "inventory_query", "inventory_low",
     "supplier_compare", "supplier_score",
-    "purchase_auto", "purchase_approval", "purchase_reject", "purchase_replay",
+    "purchase_auto", "purchase_approval", "purchase_reject", "purchase_recreate",
+    "purchase_replay",
     "receipt_normal", "receipt_quality",
 ]
 
@@ -153,8 +166,12 @@ DEFAULT_ORDER = [
 #:   * qa_degraded       —— 点了就往图谱接口里注入故障并连跑 4 次，工作台上不该有这种按钮
 #:   * purchase_replay   —— 靠「提交两次」才看得出效果，只点一次看不到幂等短路
 #:   * purchase_reject   —— decisions 预置了「驳回」，按钮上跑不出「换个人来批」的体验
+#:   * purchase_recreate —— decisions 预置了「改判重报」，页面上应当由人现场点
 #:   * receipt_quality   —— decisions 预置了复核结论，页面上应当由人现场点
-_UI_EXCLUDED = frozenset({"qa_degraded", "purchase_replay", "purchase_reject", "receipt_quality"})
+_UI_EXCLUDED = frozenset({
+    "qa_degraded", "purchase_replay", "purchase_reject", "purchase_recreate",
+    "receipt_quality",
+})
 
 
 def ui_samples() -> list[dict]:

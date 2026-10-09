@@ -1,14 +1,15 @@
 """
 收货验收子图的节点。
 
-链路：欢迎 → 要素提取 + 质检判定 →（不良率超阈值）人工复核 → 执行 + 幂等记账。
+链路：欢迎 → 要素提取 + 质检判定 →（不良率超阈值）人工复核 →（可改判重报）→ 执行 + 幂等记账。
 
 与采购申请同一条 HITL × 幂等骨架（四条不变量见 `sub_purchase_request_node`），
 差别只在触发条件与复核对象：
 
   * 采购看**金额**（要不要花这笔钱），收货看**不良率**（这批货能不能收）。
-  * 复核的产物是处置方式：入库 / 退货（Phase 5 起还有让步接收、换货与
-    recreate+patch —— 比如复核人把「退货」改成「让步接收」）。
+  * 复核的产物是处置方式：入库 / 让步接收 / 退货 / 换货。复核人能用
+    recreate+patch 在复审时改处置 —— patch 只放行 `disposition` 一个字段，
+    因为实收多少、不良多少是**到货事实**（单据数据），能改它的只有登记环节。
 
 不良率口径只有一处
 ------------------
@@ -16,18 +17,20 @@
 给人看的文案读的都是同一个值。若各写一份 `defect / received`，
 演示时「判定说超标、页面显示没超」这种自相矛盾迟早会出现。
 
-Phase 2 的简化之处（都标了 TODO，Phase 5 换掉时调用点不动）
-------------------------------------------------------------
-* 复核阈值写死 2%，Phase 5 换成 `data/seed/quality_policy.json` 的策略引擎
-  （QC-001 不良率 > 2% 需复核 等）。
-* `_submit` 已接上收货端口（Phase 4）：登记落 WMS、质检报告归档对象存储。
-  上游报文的 rcvNo / qtyActual 差异由 normalize 收口，执行节点只认内部口径。
+复核判定（Phase 5 全量）
+------------------------
+阈值不再写死，走 `integrations/policy.py` 读 `data/seed/quality_policy.json`：
+QC-001（不良率 > 2% 需复核）/ QC-000（兜底免复核），逐条进理由轨迹。
+
+patch 改不了「不良率」这个事实，所以收货侧的 recreate 复判**必然仍命中 QC-001**
+—— 二次中断是正常路径而不是死循环：第二轮复核卡上带着改后的处置方式，
+复核人看到的就是最终要执行的方案（approve 分支保留 patch 后的处置）。
 """
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
@@ -46,6 +49,7 @@ from integrations.idempotency import (
     build_receipt_id,
 )
 from integrations.normalize import normalize_receipt
+from integrations.policy import PolicyFacts, match as match_policy
 from llm.llm_receipt_draft import llm_receipt_draft
 from models.scm_models import NodeResult, PurchaseOrderInfo, ReceiptPlan, TaskResult
 from observability.progress import emit, node_done
@@ -53,10 +57,12 @@ from utils.agent_logger import get_logger
 
 logger = get_logger("sub_goods_receipt_node")
 
-#: 需要人工复核的不良率阈值。
-#: TODO(Phase 5)：改为 `load_policies("quality_policy")` 的判定（QC-001），
-#: 这条常量退化为兜底策略的参数。
-_REVIEW_DEFECT_RATE = 0.02
+#: 质检策略文件名（规则引擎按这个去 data/seed/ 取）
+_POLICY_KIND = "quality_policy"
+
+#: 复核可落定的处置方式。也是 recreate 的 patch 允许写入的取值域 ——
+#: 「待复核」是中间态，不在其中（第一轮批准时按让步接收落定）。
+_DISPOSITIONS = ("入库", "让步接收", "退货", "换货")
 
 
 class NodeName(str, Enum):
@@ -88,6 +94,22 @@ def _find_order(orders, po_no: str) -> Optional[PurchaseOrderInfo]:
         if o.po_no == po_no:
             return o
     return None
+
+
+def _quality_facts(material_code: str, material_name: str, qty_received: int,
+                   qty_defect: int, defect_rate: float) -> PolicyFacts:
+    """装配质检策略引擎的输入事实（只填收货侧字段，采购侧留默认）。
+
+    规则引擎的输入越窄越好：这批到货的「事实」就是实收、不良、不良率三个数，
+    其余上下文不该影响判定（见 `policy.PolicyFacts`）。
+    """
+    return PolicyFacts(
+        material_code=material_code,
+        material_name=material_name,
+        qty_received=qty_received,
+        qty_defect=qty_defect,
+        defect_rate=defect_rate,
+    )
 
 
 # ---------------------------------------------------------------- 节点：定方案
@@ -155,16 +177,24 @@ def match_node(state: SubGoodsReceiptState, config: RunnableConfig):
 
     defect_rate = ReceiptPlan.compute_defect_rate(draft.qty_received, qty_defect)
 
-    # ---- 复核判定（Phase 2：单一不良率阈值；Phase 5：策略引擎全条件）----
-    need_review = defect_rate > _REVIEW_DEFECT_RATE
-    if need_review:
-        trace = [f"✓ 不良率 {defect_rate:.2%} > {_REVIEW_DEFECT_RATE:.0%}，需质检复核"]
-        title = "到货质检复核"
-        disposition = "待复核"
-    else:
-        trace = [f"✗ 不良率 {defect_rate:.2%} ≤ {_REVIEW_DEFECT_RATE:.0%}，正常入库"]
-        title = "到货正常验收"
-        disposition = "入库"
+    # ---- 复核判定：策略引擎（data/seed/quality_policy.json）----
+    facts = _quality_facts(order.material_code, material_name,
+                           draft.qty_received, qty_defect, defect_rate)
+    pm = match_policy(_POLICY_KIND, facts)
+    if pm is None:
+        # 判定不可用时拒绝自动放行：宁可按「需人工」处理，也不要把一次
+        # 策略库故障静默演成「全部免复核」。
+        return _failure(
+            NodeName.MATCH.value, "质检策略不可用",
+            "暂时无法判定这批到货的复核路径，已转人工处理。",
+            "策略库为空或没有兜底规则，拒绝自动放行",
+        )
+    need_review = pm.need_approval
+    disposition = "待复核" if need_review else "入库"
+
+    # 判定依据逐条外显：命中条件（✓）、被跳过的高优先级规则（✗）
+    trace = [f"✓ {line}" for line in pm.trace]
+    trace += [f"✗ {line}" for line in pm.rejected]
 
     operator_id = _operator_id(state)
     biz_id = build_receipt_id(order.po_no, draft.qty_received, qty_defect)
@@ -184,18 +214,15 @@ def match_node(state: SubGoodsReceiptState, config: RunnableConfig):
         defect_type=draft.defect_type,
         disposition=disposition,
         need_review=need_review,
-        policy_id="QC-THRESHOLD",
-        policy_title=title,
-        priority=100,
-        reason=(
-            f"实收 {draft.qty_received}，不良 {qty_defect}，不良率 {defect_rate:.2%}"
-            + ("，超过复核阈值" if need_review else "，在允许范围内")
-        ),
+        policy_id=pm.policy_id,
+        policy_title=pm.title,
+        priority=pm.priority,
+        reason=pm.render_reason(),
         reason_trace=trace,
         status="pending_review" if need_review else "matched",
         inspector=operator_id,
         message=(
-            f"不良率 {defect_rate:.2%} 超过阈值，需人工复核后决定入库或退货，正在等待复核。"
+            f"不良率 {defect_rate:.2%} 超过阈值，需人工复核后决定处置方式，正在等待复核。"
             if need_review
             else f"到货验收合格（不良率 {defect_rate:.2%}），已办理入库。"
         ),
@@ -204,14 +231,17 @@ def match_node(state: SubGoodsReceiptState, config: RunnableConfig):
     for line in trace:
         emit("quality_check", detail=line)
 
-    node_done(NodeName.MATCH.value, f"{biz_id} defect_rate={defect_rate:.2%} review={need_review}")
+    node_done(
+        NodeName.MATCH.value,
+        f"{biz_id} defect_rate={defect_rate:.2%} policy={pm.policy_id} review={need_review}",
+    )
 
     return {
         SubGoodsReceiptStateField.GOODS_RECEIPT: plan,
         SubGoodsReceiptStateField.NODE_RESULT: [NodeResult(
             execute_node_name=NodeName.MATCH.value,
             execute_result_code=0,
-            execute_result_msg=f"生成收货方案 {biz_id}（{title}）",
+            execute_result_msg=f"生成收货方案 {biz_id}（{pm.policy_id} {pm.title}）",
             execute_exceptions=[]
         )]
     }
@@ -229,13 +259,18 @@ def approval_node(state: SubGoodsReceiptState, config: RunnableConfig):
         return _failure(NodeName.APPROVAL.value, "没有待复核的方案",
                         "复核失败，请重试。", "状态里没有 goods_receipt")
 
-    logger.info(f"=== 等待质检复核：{plan.plan_id} ===")
-    emit("hitl_wait", detail=f"{plan.material_name}：不良率 {plan.defect_rate:.2%} 待复核")
+    round_no = plan.revision + 1
+    logger.info(f"=== 等待质检复核：{plan.plan_id}（第 {round_no} 轮）===")
+    emit("hitl_wait", detail=(
+        f"{plan.material_name}：不良率 {plan.defect_rate:.2%} 待复核"
+        + (f"（第 {round_no} 轮）" if plan.revision else "")
+    ))
 
     decision = interrupt({
         "type": "quality_review",
         "plan_id": plan.plan_id,
         "biz_id": plan.biz_id,
+        "revision": plan.revision,
         "po_no": plan.po_no,
         "material_code": plan.material_code,
         "material_name": plan.material_name,
@@ -247,6 +282,7 @@ def approval_node(state: SubGoodsReceiptState, config: RunnableConfig):
         "defect_rate": plan.defect_rate,
         "defect_type": plan.defect_type,
         "disposition": plan.disposition,
+        "policy_id": plan.policy_id,
         "reason": plan.reason,
         "reason_trace": plan.reason_trace,
         "description": (
@@ -256,29 +292,40 @@ def approval_node(state: SubGoodsReceiptState, config: RunnableConfig):
         ),
     })
 
-    approved, operator = _parse_decision(decision)
-    logger.info(f"复核结论：{'通过' if approved else '驳回'}（{operator or '未署名'}）")
+    action, operator, patch = _parse_decision(decision)
+    logger.info(f"复核结论：{_ACTION_TEXT[action]}（{operator or '未署名'}）")
 
     thread_id = _thread_id(config)
     guard = IdempotencyGuard()
+
+    if action == "recreate":
+        return _recreate_node(state, config, plan, patch, operator, guard)
+
+    approved = action == "approve"
+    # 复核记录同一轮内首写胜：这个节点会被重放，重放不应该记第二笔
     is_first = guard.record_approval(
         thread_id=thread_id, plan_id=plan.plan_id,
-        decision="approved" if approved else "rejected", operator=operator,
+        decision="approved" if approved else "rejected",
+        operator=operator, revision=plan.revision,
     )
     if not is_first:
         emit("idempotent_replay", detail=f"复核记录已存在，跳过重复写入（{plan.plan_id}）")
 
+    if approved:
+        # 复审轮次里 patch 已经把处置方式写进了 plan.disposition，复核通过就按
+        # 它执行；第一轮批准时 disposition 还是「待复核」，按让步接收落定
+        # （整批处理：良品入库、不良品按协议处理）。
+        disposition = plan.disposition if plan.disposition in _DISPOSITIONS else "让步接收"
+        message = f"复核通过，按「{disposition}」处置执行。"
+    else:
+        disposition = "退货"
+        message = f"复核未通过：整批拒收，{plan.qty_received} 件按退货处理。"
+
     updated = plan.model_copy(update={
         "status": "approved" if approved else "rejected",
         "approved_by": operator,
-        # 复核通过的处置：不良品退回供应商、良品入库；复核驳回即整批拒收
-        "disposition": "让步接收" if approved else "退货",
-        "message": (
-            f"复核通过：{plan.qty_received - plan.qty_defect} 件办理入库，"
-            f"{plan.qty_defect} 件不良退回供应商。"
-            if approved
-            else f"复核未通过：整批拒收，{plan.qty_received} 件办理退货换货。"
-        ),
+        "disposition": disposition,
+        "message": message,
     })
 
     emit("quality_check", detail=f"复核{'通过' if approved else '驳回'}：{plan.plan_id}")
@@ -294,22 +341,150 @@ def approval_node(state: SubGoodsReceiptState, config: RunnableConfig):
     }
 
 
-def _parse_decision(decision: Any) -> Tuple[bool, str]:
-    """复核入参归一 —— 与采购审批同一份协议、同一套三种形态（见那边的注释）。"""
+def _recreate_node(state: SubGoodsReceiptState, config: RunnableConfig,
+                   plan: ReceiptPlan, patch: Dict[str, Any], operator: str,
+                   guard: IdempotencyGuard) -> Dict[str, Any]:
+    """改判重报：按 patch 改处置方式，**重走一遍策略引擎**。
+
+    patch 只有 `disposition` 一个字段会生效：实收/不良是到货事实（登记环节
+    写下的数据），复核人不能改事实，只能改对事实的处置。复判时不良率没变、
+    QC-001 必然仍命中 —— 二次中断是正常路径：第二轮复核卡上带着改后的处置
+    方式，复核人看到的就是最终要执行的方案。
+
+    不带改动直接重报（patch 缺席或值不合法）同样走这条路：原样复判、
+    再中断一轮，绝不静默放行。
+    """
+    thread_id = _thread_id(config)
+    guard.record_approval(
+        thread_id=thread_id, plan_id=plan.plan_id,
+        decision="recreated", operator=operator, revision=plan.revision,
+    )
+
+    disposition, notes = _apply_recreate_patch(patch)
+
+    facts = _quality_facts(plan.material_code, plan.material_name,
+                           plan.qty_received, plan.qty_defect, plan.defect_rate)
+    pm = match_policy(_POLICY_KIND, facts)
+    if pm is None:  # pragma: no cover - match 节点已拦过一次
+        return _failure(NodeName.APPROVAL.value, "质检策略不可用",
+                        "暂时无法复判这批到货，已转人工处理。",
+                        "策略库为空或没有兜底规则，拒绝自动放行")
+
+    need_review = pm.need_approval
+    revision = plan.revision + 1
+
+    trace = [f"↻ 第 {revision + 1} 轮重报：{'；'.join(notes) if notes else '未带修改，原样复判'}"]
+    trace += [f"✓ {line}" for line in pm.trace]
+    trace += [f"✗ {line}" for line in pm.rejected]
+
+    updated = plan.model_copy(update={
+        "revision": revision,
+        "disposition": disposition or plan.disposition,
+        "need_review": need_review,
+        "policy_id": pm.policy_id,
+        "policy_title": pm.title,
+        "priority": pm.priority,
+        "reason": pm.render_reason(),
+        "reason_trace": trace,
+        "status": "pending_review" if need_review else "matched",
+        "message": (
+            f"已按修改重新提报（第 {revision + 1} 轮），复判仍需质检复核，正在等待复核。"
+            if need_review
+            else f"已按修改重新提报（第 {revision + 1} 轮），复判免复核，正在执行。"
+        ),
+    })
+
+    emit("hitl_recreate", detail=(
+        f"第 {revision + 1} 轮重报：{'；'.join(notes) if notes else '未带修改'}"
+        + ("，复判仍需复核" if need_review else "，复判免复核")
+    ))
+
+    return {
+        SubGoodsReceiptStateField.GOODS_RECEIPT: updated,
+        SubGoodsReceiptStateField.NODE_RESULT: [NodeResult(
+            execute_node_name=NodeName.APPROVAL.value,
+            execute_result_code=0,
+            execute_result_msg=(
+                f"人工改判重报（第 {revision + 1} 轮：处置「{disposition or plan.disposition}」）"
+            ),
+            execute_exceptions=[]
+        )]
+    }
+
+
+def _apply_recreate_patch(patch: Any) -> Tuple[Optional[str], List[str]]:
+    """从 recreate 的 patch 里取出允许修改的处置方式；其余键原样忽略并留痕。
+
+    校验失败的行必须出现在轨迹里 —— 「我明明改成了换货，怎么还是按原处置
+    走」这类疑问只有留痕才回答得了。
+    """
+    notes: List[str] = []
+    source = patch if isinstance(patch, dict) else {}
+
+    for key in sorted(source):
+        if key != "disposition":
+            notes.append(f"{key} 不是可修改字段，已忽略")
+
+    if "disposition" not in source:
+        return None, notes
+
+    value = str(source["disposition"] or "").strip()
+    if value in _DISPOSITIONS:
+        notes.append(f"处置方式改为「{value}」")
+        return value, notes
+
+    notes.append(
+        f"disposition「{value}」不在允许范围（{'/'.join(_DISPOSITIONS)}），已忽略"
+    )
+    return None, notes
+
+
+def _parse_decision(decision: Any) -> Tuple[str, str, Dict[str, Any]]:
+    """复核入参归一 —— 与采购审批同一份协议、同一套形态（见那边的注释）。
+
+    返回 (动作, 署名, patch)：动作 ∈ approve / discard / recreate。
+    认不出的取值一律按驳回处理（拒绝执行是安全方向）；`patch` 只在 recreate
+    分支被读取，其余分支原样忽略。
+    """
     if isinstance(decision, dict):
         operator = str(decision.get("operator", "") or "")
-        if _CONFIRMED in decision:
-            return str(decision.get(_CONFIRMED, "")).strip().lower() in _APPROVE_VALUES, operator
+        patch = decision.get("patch")
+        patch = dict(patch) if isinstance(patch, dict) else {}
+
+        raw = decision.get(_CONFIRMED)
+        if raw is None:
+            raw = decision.get("decision")
+        if raw is not None:
+            return _classify(str(raw)), operator, patch
+
         approved = decision.get("approved")
         if approved is None:
-            approved = str(decision.get("decision", "")).lower() in _APPROVE_VALUES
-        return bool(approved), operator
+            return "discard", operator, patch
+        return ("approve" if bool(approved) else "discard"), operator, patch
 
-    return str(decision or "").strip().lower() in _APPROVE_VALUES, ""
+    return _classify(str(decision or "")), "", {}
 
 
+def _classify(raw: str) -> str:
+    value = raw.strip().lower()
+    if value in _APPROVE_VALUES:
+        return "approve"
+    if value in _RECREATE_VALUES:
+        return "recreate"
+    return "discard"
+
+
+#: 图内 HITL 协议的字段名，与其他 HITL 子图共用（恢复值会被原样返回）
 _CONFIRMED = "confirmed"
+
+#: 视为「通过」的取值
 _APPROVE_VALUES = {"ok", "approve", "approved", "yes", "pass", "通过"}
+
+#: 视为「改判重报」的取值
+_RECREATE_VALUES = {"recreate", "reapply", "revise", "重报", "改报"}
+
+#: 动作 -> 中文（日志用）
+_ACTION_TEXT = {"approve": "通过", "discard": "驳回", "recreate": "改判重报"}
 
 
 def _thread_id(config: RunnableConfig) -> str:
@@ -328,6 +503,8 @@ def execute_node(state: SubGoodsReceiptState, config: RunnableConfig):
 
     if plan.status == "rejected":
         logger.info(f"方案 {plan.plan_id} 复核未通过，按退货处理")
+        # 见采购侧同款注释：不 emit 的话兜底事件会把驳回的登记标记成「已入库」
+        emit("hitl_rejected", detail=f"{plan.biz_id} 复核驳回，未办理入库")
         return _done(plan, "复核驳回：整批退货，未办理入库")
 
     guard = IdempotencyGuard()
@@ -346,10 +523,10 @@ def execute_node(state: SubGoodsReceiptState, config: RunnableConfig):
         )
     except IdempotencyConflict as conflict:
         logger.error(f"幂等冲突：{conflict}")
-        emit("idempotent_replay", detail=f"幂等冲突：{conflict.key} 的登记内容与首次不一致，已转人工")
+        emit("idempotent_conflict", detail=f"{conflict.key} 的登记要素与首次不一致")
         updated = plan.model_copy(update={
             "status": "conflict",
-            "message": "这笔到货此前已登记过、且数量不一致，为避免重复入库，已转人工核实。",
+            "message": "这笔到货此前已登记过、且登记要素不一致，为避免重复入库，已转人工核实。",
         })
         return _done(updated, "幂等冲突，转人工核实")
 
@@ -423,12 +600,27 @@ def _submit(plan: ReceiptPlan) -> Dict[str, Any]:
 
 
 def _executed_message(plan: ReceiptPlan, result: Dict[str, Any]) -> str:
+    """执行结论文案：按**最终处置方式**分支（它可能来自复核、也可能来自 patch）。"""
+    number = result.get("receipt_no") or plan.biz_id
+    stored = result.get("qty_stored", 0)
+    returned = result.get("qty_returned", 0)
+
     if plan.disposition == "退货":
-        return f"已办理退货换货（收货单 {result.get('receipt_no') or plan.biz_id}），请联系供应商安排退回。"
+        return f"已办理退货（收货单 {number}）：{plan.qty_received} 件整批退回供应商，未办理入库。"
+    if plan.disposition == "换货":
+        return (
+            f"已办理换货（收货单 {number}）：{plan.qty_received} 件退回供应商换新，"
+            f"请在新批次到货后重新登记收货。"
+        )
+    if plan.disposition == "让步接收":
+        return (
+            f"已按让步接收办理（收货单 {number}）：{stored} 件入库，"
+            f"{returned} 件不良按协议折价处理。"
+        )
     return (
-        f"已办理入库 {result.get('qty_stored', 0)} 件"
-        f"{'，' + str(result.get('qty_returned')) + ' 件不良退回供应商' if result.get('qty_returned') else ''}"
-        f"（收货单 {result.get('receipt_no') or plan.biz_id}）。"
+        f"已办理入库 {stored} 件"
+        f"{'，' + str(returned) + ' 件不良退回供应商' if returned else ''}"
+        f"（收货单 {number}）。"
     )
 
 
@@ -453,10 +645,16 @@ def _done(plan: ReceiptPlan, note: str) -> Dict[str, Any]:
 
 
 def _failure(node: str, msg: str, reply: str, detail: str) -> Dict[str, Any]:
+    """要素缺失 / 策略不可用等「没有形成可执行方案」的返回。
+
+    status 用 `failed` 而不是 `matched`：子图的条件边会把它直接送到 END ——
+    失败方案绝不能流过执行节点（那会拿空要素去登记入库）。这条曾经真的发生过：
+    status=matched 的失败方案在条件边眼里和「免复核方案」一模一样。
+    """
     logger.warning(f"{msg}：{detail}")
     return {
         SubGoodsReceiptStateField.GOODS_RECEIPT: ReceiptPlan(
-            status="matched", policy_title=msg, message=reply, reason=detail,
+            status="failed", policy_title=msg, message=reply, reason=detail,
         ),
         SubGoodsReceiptStateField.TASK_RESULT: TaskResult(
             task_result=reply, task_result_explain=detail, task_result_code=1

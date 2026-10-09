@@ -158,6 +158,7 @@ function addMessage(role, text) {
 const TONE = {
   handoff: 'warn',
   idempotent_replay: 'warn',
+  idempotent_conflict: 'warn',
   report_verify_failed: 'warn',
   refund_submitted: 'ok',
   policy_match: 'ok',
