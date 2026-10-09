@@ -90,7 +90,7 @@ def test_confidence_composes_three_signals_and_stays_in_unit_interval(knowledge_
 def test_unanswerable_question_is_vetoed_by_ask_coverage_not_by_a_low_score(knowledge_base):
     """「资料里压根没有」的问题：排序分数不低，但诉求词覆盖率为 0 —— 判负转人工。
 
-    这是整条兜底里最容易被误解的一处：拦住它的**不是** 0.35 那个阈值，
+    这是整条兜底里最容易被误解的一处：拦住它的**不是**置信度阈值那个数字，
     而是「诉求词一个都没着落」这条语义判据。所以这里先断言 top1 高于阈值
     （分数本身够得着），再断言置信度被强制为 0。
 

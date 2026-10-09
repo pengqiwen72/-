@@ -7,7 +7,7 @@
 那样**每次查询的第一名都必然是 1.0**——哪怕这次一条都没真正匹配上，
 排在最前面的那条垃圾片段也会得到满分。
 
-后果是置信度彻底失去意义：固定阈值（比如 0.35）永远会被突破，
+后果是置信度彻底失去意义：固定阈值（比如 0.30）永远会被突破，
 「检索不到就转人工」这条兜底逻辑**永远不会触发**。这个 bug 很隐蔽，
 因为单看某一次查询的结果，分数分布看起来很合理。
 
@@ -17,6 +17,11 @@
     raw = 9  -> 0.75
     raw = 30 -> 0.91
 分数反映的是**这条片段本身的匹配强度**，与本次其他候选无关。阈值因此可比、可调。
+
+图事实走同一条映射：`ScoredChunk.preset_raw` 非 None 时直接采用（`raw/(raw+3)`），
+跳过词法打分。图事实的分来自**路径完整度**（三跳链 > 两跳 > 单点），不是词法
+重合度——「调拨建议：从 WH01 调拨 100 kg 到 WH02」里一个查询词都没有，
+交给 BM25 会被打成 0 分，而它是本次查询里结构上最确定的一条事实。
 
 重排信号
 --------
@@ -70,6 +75,14 @@ class LexicalReranker:
         query_norm = "".join(query.split())
 
         for cand in candidates:
+            if cand.preset_raw is not None:
+                # 自带分（图事实）：套用同一个饱和映射后直接采用（见模块文档）。
+                # title_hit 保持 0：图 chunk 的「标题」是「供应链知识图谱」，
+                # 与查询重合度天然为 0，它是商品维度收敛的判据，与图无关。
+                cand.rerank = cand.preset_raw / (cand.preset_raw + SQUASH)
+                cand.title_hit = 0.0
+                continue
+
             tokens = tokenize(cand.chunk.text)
             cand.rerank = self._score(
                 query_terms, tokens, cand.chunk.text, query_norm

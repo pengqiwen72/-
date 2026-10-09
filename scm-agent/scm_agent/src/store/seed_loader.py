@@ -21,8 +21,13 @@ demo 数字对不上比跑不起来更伤，见该函数的说明。
 
 用法
 ----
-    from store.seed_loader import load_seed_data
-    load_seed_data(store)           # 幂等，重复调用只是覆盖同样的键
+    from store.seed_loader import load_seed_data, build_knowledge_graph
+    load_seed_data(store)            # 幂等，重复调用只是覆盖同样的键
+    build_knowledge_graph(graph)     # 同一批 JSON 投影成知识图谱（见该函数说明）
+
+store（LangGraph Store）与 graph（知识图谱）是**两个消费者、一份事实**：
+前者供子图读写业务数据，后者供多跳查询，投影规则各自在加载/建图时明确写死，
+JSON 始终是唯一事实源。
 """
 
 from __future__ import annotations
@@ -409,6 +414,192 @@ def verify_seed_data() -> List[str]:
             errors.append(f"{filename} 缺少空条件 {{}} 的兜底规则")
 
     return errors
+
+
+# ==================== 知识图谱投影 ====================
+
+def build_knowledge_graph(graph) -> Dict[str, Any]:
+    """把种子 JSON 投影成知识图谱（`kg/store.py::get_graph_store` 首次调用时建图）。
+
+    投影规则
+    --------
+      * **节点**：物料 / 供应商 / 仓库 / 库存快照 / 采购单 / 收货单 / 策略规则。
+        属性只取**查询用得到的字段** —— 种子里 `days_ago` 这类加载期字段
+        不进图，否则图与 JSON 会各自偷偷长出一份真相。
+      * **边**：只建会被多跳遍历用到的关系（口径见 `kg/schema.py`）：
+        报价对 → SUPPLIES，登记的替代料 → SUBSTITUTES，库存快照 → 物料/仓库，
+        采购单 → 物料/供应商，收货单 → 物料/仓库。POLICY 只有节点没有边。
+      * **库存口径**（qty_available / below_safety / turnover_days）由
+        `StockItem` 计算后写进节点属性 —— 口径只在模型里定义一次，
+        图查询读到的值与库存子图聚合出的值必然一致。
+
+    写入顺序：**先全部节点、后全部边**。neo4j 的 `upsert_edge` 是 MATCH 语义，
+    端点不存在时边会被静默丢掉；先建点后建边让两种后端的行为一致。
+    幂等：重复调用覆盖同样的键（与 `load_seed_data` 同一约定）。
+
+    数据合法性由 `verify_seed_data()` 前置保证（外键、替代料存在、报价对有效），
+    这里不再做防御性判空 —— 有一条校验漏网就会在图上留下悬空边，
+    而那是校验层的问题，不该在这里被悄悄吞掉。
+    """
+    # 函数内 import：seed_loader 被 kg 层回调，模块级 import kg 会把
+    # 「kg -> store.seed_loader -> kg」拧成一个 import 环
+    from kg.schema import EdgeKind, NodeKind, node_id, stock_item_key
+    from models.scm_models import ReceiptPlan, StockItem
+
+    materials = _read_json("materials.json").get("materials", [])
+    suppliers = _read_json("suppliers.json").get("suppliers", [])
+    warehouses = _read_json("warehouses.json").get("warehouses", [])
+    stock = _read_json("stock.json").get("stock", [])
+    quotes = _read_json("quotes.json").get("quotes", [])
+    orders = _read_json("purchase_orders.json").get("purchase_orders", [])
+    receipts = _read_json("receipts.json").get("receipts", [])
+
+    stats: Dict[str, Any] = {"node": 0, "edge": 0, "by_kind": {}, "by_edge": {}}
+
+    def add_node(kind: NodeKind, key: str, props: Dict[str, Any]) -> None:
+        graph.upsert_node(kind, key, props)
+        stats["node"] += 1
+        stats["by_kind"][kind.value] = stats["by_kind"].get(kind.value, 0) + 1
+
+    def add_edge(src: str, dst: str, kind: EdgeKind,
+                 props: Optional[Dict[str, Any]] = None) -> None:
+        graph.upsert_edge(src, dst, kind, props or {})
+        stats["edge"] += 1
+        stats["by_edge"][kind.value] = stats["by_edge"].get(kind.value, 0) + 1
+
+    # ---- 节点 ----
+    for m in materials:
+        add_node(NodeKind.MATERIAL, m["material_code"], {
+            "material_name": m.get("material_name", ""),
+            "spec": m.get("spec", ""),
+            "category": m.get("category", ""),
+            "unit": m.get("unit", ""),
+            "unit_price_ref": m.get("unit_price_ref", 0.0),
+        })
+
+    for s in suppliers:
+        add_node(NodeKind.SUPPLIER, s["supplier_code"], {
+            "supplier_name": s.get("supplier_name", ""),
+            "is_new": bool(s.get("is_new", False)),
+            "lead_time_days": s.get("lead_time_days", 0),
+            "on_time_rate": s.get("on_time_rate", 0.0),
+            "defect_rate": s.get("defect_rate", 0.0),
+            "cooperation_since": s.get("cooperation_since", ""),
+            "main_categories": list(s.get("main_categories") or []),
+        })
+
+    for w in warehouses:
+        add_node(NodeKind.WAREHOUSE, w["warehouse_code"], {
+            "warehouse_name": w.get("warehouse_name", ""),
+            "city": w.get("city", ""),
+            "address": w.get("address", ""),
+        })
+
+    for row in stock:
+        item = StockItem(**row)
+        add_node(NodeKind.STOCK_ITEM,
+                 stock_item_key(item.material_code, item.warehouse_code), {
+                     "material_code": item.material_code,
+                     "warehouse_code": item.warehouse_code,
+                     "on_hand": item.on_hand,
+                     "reserved": item.reserved,
+                     "safety_stock": item.safety_stock,
+                     "avg_daily_out": item.avg_daily_out,
+                     "qty_available": item.qty_available,
+                     "below_safety": item.below_safety,
+                     "turnover_days": item.turnover_days,
+                 })
+
+    for o in orders:
+        add_node(NodeKind.PO, o["po_no"], {
+            "request_id": o.get("request_id", ""),
+            "material_code": o.get("material_code", ""),
+            "qty": o.get("qty", 0),
+            "unit": o.get("unit", ""),
+            "unit_price": o.get("unit_price", 0.0),
+            "amount": o.get("amount", 0.0),
+            "supplier_code": o.get("supplier_code", ""),
+            "target_warehouse": o.get("target_warehouse", ""),
+            "status": o.get("status", ""),
+            "status_text": o.get("status_text", ""),
+            "operator_id": o.get("operator_id", ""),
+        })
+
+    for r in receipts:
+        add_node(NodeKind.RECEIPT, r["receipt_no"], {
+            "po_no": r.get("po_no", ""),
+            "material_code": r.get("material_code", ""),
+            "qty_expected": r.get("qty_expected", 0),
+            "qty_received": r.get("qty_received", 0),
+            "qty_defect": r.get("qty_defect", 0),
+            "defect_rate": ReceiptPlan.compute_defect_rate(
+                int(r.get("qty_received", 0)), int(r.get("qty_defect", 0))),
+            "defect_type": r.get("defect_type", ""),
+            "disposition": r.get("disposition", ""),
+            "warehouse_code": r.get("warehouse_code", ""),
+            "supplier_code": r.get("supplier_code", ""),
+            "inspector": r.get("inspector", ""),
+        })
+
+    for filename in ("purchase_policy.json", "quality_policy.json"):
+        for p in _read_json(filename).get("policies", []):
+            add_node(NodeKind.POLICY, p["policy_id"], {
+                "priority": p.get("priority", 0),
+                "title": p.get("title", ""),
+                "action": p.get("action", ""),
+                # conditions 是嵌套 dict，neo4j 属性只支持标量/列表 ——
+                # 序列化成 JSON 字符串，两边后端都能存
+                "conditions": json.dumps(p.get("conditions") or {},
+                                         ensure_ascii=False),
+            })
+
+    # ---- 边 ----
+    # 替代料：互替关系在种子里两边都登记，这里原样成边（谁登记谁负责）
+    for m in materials:
+        for sub in m.get("substitutes") or []:
+            add_edge(node_id(NodeKind.MATERIAL, m["material_code"]),
+                     node_id(NodeKind.MATERIAL, sub), EdgeKind.SUBSTITUTES)
+
+    # 报价对 -> SUPPLIES 边（有报价才叫「供得了」；边属性沿用报价单字段）
+    for q in quotes:
+        add_edge(node_id(NodeKind.SUPPLIER, q["supplier_code"]),
+                 node_id(NodeKind.MATERIAL, q["material_code"]),
+                 EdgeKind.SUPPLIES, {
+                     "unit_price": q.get("unit_price", 0.0),
+                     "min_order_qty": q.get("min_order_qty", 0),
+                     "valid_days": q.get("valid_days", 0),
+                 })
+
+    # 库存快照 -> 物料 / 仓库
+    for row in stock:
+        sid = node_id(NodeKind.STOCK_ITEM,
+                      stock_item_key(row["material_code"], row["warehouse_code"]))
+        add_edge(sid, node_id(NodeKind.MATERIAL, row["material_code"]),
+                 EdgeKind.IS_MATERIAL)
+        add_edge(sid, node_id(NodeKind.WAREHOUSE, row["warehouse_code"]),
+                 EdgeKind.STOCKED_AT)
+
+    # 采购单 -> 物料 / 供应商（target_warehouse 是属性，见 kg/schema.py）
+    for o in orders:
+        pid = node_id(NodeKind.PO, o["po_no"])
+        add_edge(pid, node_id(NodeKind.MATERIAL, o["material_code"]),
+                 EdgeKind.IS_MATERIAL)
+        add_edge(pid, node_id(NodeKind.SUPPLIER, o["supplier_code"]),
+                 EdgeKind.SOURCED_FROM)
+
+    # 收货单 -> 物料 / 仓库
+    for r in receipts:
+        rid = node_id(NodeKind.RECEIPT, r["receipt_no"])
+        add_edge(rid, node_id(NodeKind.MATERIAL, r["material_code"]),
+                 EdgeKind.IS_MATERIAL)
+        add_edge(rid, node_id(NodeKind.WAREHOUSE, r["warehouse_code"]),
+                 EdgeKind.RECEIVED_AT)
+
+    logger.info(
+        f"知识图谱投影完成：{stats['node']} 节点 / {stats['edge']} 边"
+        f"（节点 {stats['by_kind']}，边 {stats['by_edge']}）"
+    )
+    return stats
 
 
 # ==================== 对外入口 ====================

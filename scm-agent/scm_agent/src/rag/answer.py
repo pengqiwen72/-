@@ -398,7 +398,9 @@ def _handoff_reason(detail: dict) -> str:
         return f"{detail['reason']}（置信度 {detail.get('confidence', '')}）"
 
     parts: List[str] = []
-    if detail.get("top1", 0) < 0.35:
+    # 与**实际生效的**阈值比较（而非写死默认值）：阈值可以走环境变量调整，
+    # 写死的话调参后这段话术就会和真实判定脱节，说反原因。
+    if threshold_value is not None and detail.get("top1", 0) < threshold_value:
         parts.append("最相关片段的相关度偏低")
     if detail.get("coverage", 0) < 0.5:
         parts.append("问题中的关键词在资料里覆盖不足")

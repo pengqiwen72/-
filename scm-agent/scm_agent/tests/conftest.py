@@ -80,10 +80,18 @@ def _isolated_runtime():
     import tools.store_tool as store_tool
 
     def _reset() -> None:
+        from kg.store import reset_graph_store
+        from observability import degrade as degrade_mod
+
         reset_ports()
         reset_fallback_store()
         # 模块级 store_client 缓存的 store 引用也要清（见文件头「用例隔离」）
         store_tool.store_client._store = None
+        # 图存储是从种子投影的进程级单例；降级级别是进程级 module globals。
+        # 不重置的话，上一个用例的图故障注入（MOCK_FAIL_ACTIONS=graph）
+        # 会把 L1 状态留给下一个用例，问答断言变成顺序相关的假红/假绿。
+        reset_graph_store()
+        degrade_mod.reset()
 
     _reset()
     try:

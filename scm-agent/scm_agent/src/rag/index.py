@@ -17,6 +17,13 @@
 设为 `milvus` 时走 `MilvusBackend`（需 `pip install pymilvus`），
 用于演示「换真向量库不改业务代码」。**注意**：milvus 后端目前只替换召回通道，
 重排与置信度逻辑完全复用——这也是分层的意义。
+
+双通道与降级
+------------
+本层同时是「文档 + 图谱」双通道的**汇合点**：`search()` 里路由（`rag.router`）
+决定图谱通道是否接入，图谱入口（`kg.query.retrieve`）以注入方式交给
+`HybridRetriever`（依赖方向单一：rag -> kg）。`ask()` 是**请求边界**：
+入口处重置降级状态，出口处按本次请求的通道可用性拼页脚（`observability/degrade`）。
 """
 
 from __future__ import annotations
@@ -24,7 +31,10 @@ from __future__ import annotations
 import os
 from typing import Callable, Dict, List, Optional
 
+from observability import degrade as degrade_mod
+from observability.progress import emit
 from rag import confidence as confidence_mod
+from rag import router as router_mod
 from rag.answer import build_answer, build_facts_block
 from rag.chunking import chunk_documents
 from rag.document import corpus_fingerprint, load_corpus
@@ -55,25 +65,35 @@ _CACHE: Dict[str, "ProductKnowledgeBase"] = {}
 class ProductKnowledgeBase:
     """商品知识库。一次构建，多次问答。"""
 
-    def __init__(self, chunks: List[Chunk], fingerprint: str = ""):
+    def __init__(self, chunks: List[Chunk], fingerprint: str = "",
+                 graph_retrieve: Optional[Callable[[str], list]] = None):
         self.chunks = chunks
         self.fingerprint = fingerprint
-        self.retriever = HybridRetriever(chunks)
+        self.retriever = HybridRetriever(chunks, graph_retrieve=graph_retrieve)
         self.reranker = LexicalReranker(self.retriever.chunk_tokens)
 
     # ---------- 检索 ----------
 
     def search(self, query: str, recall_k: int = DEFAULT_RECALL_K,
-               top_k: int = DEFAULT_TOP_K) -> List[ScoredChunk]:
+               top_k: int = DEFAULT_TOP_K,
+               channel: Optional[router_mod.Channel] = None) -> List[ScoredChunk]:
         """召回 + 重排，返回按相关度降序的候选。
 
-        查询会先过一层领域同义词扩展：客户说的「磕碰」在知识库里写作「破损」，
+        查询会先过一层领域同义词扩展：用户说的「断料」在语料里写作「缺料」，
         不扩展的话两句话一个字都不重合，检索会命中别的条款还给出不低的分数。
         扩展只作用于检索，置信度里的术语覆盖率仍用原查询算——详见 `expansion.py`。
+
+        路由在**扩展后**的文本上判类（与 `confidence.ask_coverage` 同一口径）：
+        系统既然承认两词等价，通道判断也该认。`channel` 由调用方传入时复用
+        （`ask()` 已经算过一次），避免同一问题路由两次。
         """
         expanded, _ = expand_query(query)
+        if channel is None:
+            channel = router_mod.classify(expanded)
+        emit("channel_route", detail=f"检索通道：{router_mod.LABELS[channel]}",
+             channel=channel.value)
 
-        candidates = self.retriever.search(expanded, top_k=recall_k)
+        candidates = self.retriever.search(expanded, top_k=recall_k, channel=channel)
         if not candidates:
             return []
         ranked = self.reranker.rerank(expanded, candidates)
@@ -135,12 +155,17 @@ class ProductKnowledgeBase:
 
         离线模式两个都不传，直接走确定性转述——这是默认路径。
         """
+        # 请求边界：降级级别只反映**本次问答**期间的通道可用性，
+        # 不把上一轮的降级带进这一轮（见 observability/degrade.py）
+        degrade_mod.reset()
+
         question = (question or "").strip()
         if not question:
             return RagAnswer(answer="", status="handoff", reason="问题为空", confidence=0.0)
 
-        _, injected = expand_query(question)
-        ranked = self.search(question, top_k=top_k)
+        expanded, injected = expand_query(question)
+        channel = router_mod.classify(expanded)
+        ranked = self.search(question, top_k=top_k, channel=channel)
         # 覆盖率用**原查询**算：扩展词是人为注入的，拿来算覆盖率会虚高
         conf, detail = confidence_mod.compute(ranked, question)
         handoff = confidence_mod.should_handoff(conf)
@@ -148,7 +173,8 @@ class ProductKnowledgeBase:
             detail["expanded"] = injected
 
         logger.info(
-            f"问答: {question[:40]} | 扩展 {injected or '无'} | 召回 {len(ranked)} 条 | "
+            f"问答: {question[:40]} | 扩展 {injected or '无'} | 通道 {channel.value} | "
+            f"召回 {len(ranked)} 条 | "
             f"置信度 {conf} (top1={detail.get('top1')} margin={detail.get('margin')} "
             f"coverage={detail.get('coverage')}) | "
             f"{'转人工' if handoff else '直接回答'}"
@@ -161,9 +187,19 @@ class ProductKnowledgeBase:
             except Exception as e:
                 logger.warning(f"生成失败，回退确定性转述：{e}")
 
-        return build_answer(
+        answer = build_answer(
             question, ranked, conf, detail, handoff=handoff, model_text=model_text
         )
+        answer.channel = channel.value
+
+        # 本次请求里发生过通道降级（L1 图不可用 / L2 文档不可用）时，
+        # 在答案末尾如实说明「这次少用了什么」——用户看到的不是级别编号，
+        # 而是一句人话。L3（转人工）没有页脚：答案本身就是结局。
+        footer = degrade_mod.footer()
+        if footer:
+            answer.answer = f"{answer.answer}{footer}"
+            answer.degraded = True
+        return answer
 
     def facts_for(self, question: str, top_k: int = DEFAULT_TOP_K) -> str:
         """只取事实单——给「先检索、再调模型、后校验」的外部编排路径用。"""
@@ -189,6 +225,22 @@ def vector_store_mode() -> str:
     return (os.getenv("VECTOR_STORE") or "local").strip().lower()
 
 
+def _graph_retriever() -> Optional[Callable[[str], list]]:
+    """懒取图谱通道入口（`kg.query.retrieve`）。
+
+    import 放在函数里：`kg` 只在知识库构建时加载一次。拿不到就返回 None ——
+    问答链路退化为纯文档通道（图后端的问题在 kg 内部已经有一层 L1 兜底，
+    这里是最后一层：连模块都 import 不进来时，问答本身不能挂）。
+    """
+    try:
+        from kg.query import retrieve as graph_retrieve
+
+        return graph_retrieve
+    except Exception as e:  # pragma: no cover - 正常安装下不会发生
+        logger.warning(f"图谱模块不可用（{e}），本次仅启用文档通道")
+        return None
+
+
 def get_knowledge_base(*, force_rebuild: bool = False) -> ProductKnowledgeBase:
     """取知识库（按语料指纹缓存）。"""
     docs = load_corpus()
@@ -202,7 +254,7 @@ def get_knowledge_base(*, force_rebuild: bool = False) -> ProductKnowledgeBase:
     if vector_store_mode() in {"milvus", "remote", "http"}:
         chunks = _maybe_reindex_with_milvus(chunks)
 
-    kb = ProductKnowledgeBase(chunks, fingerprint)
+    kb = ProductKnowledgeBase(chunks, fingerprint, graph_retrieve=_graph_retriever())
     _CACHE[fingerprint] = kb
     logger.info(f"知识库构建完成：{kb.stats()}")
 
