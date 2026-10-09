@@ -13,23 +13,29 @@
     http + direct  ← 进程内直连生产系统
     http + mcp     ← 推荐的生产形态：工具层独立部署、单独限流与审计
 
-两者相乘而不是合并成一个枚举，是因为它们回答的是不同的问题 ——
+两者相乘而不是合并成一个枚举，是因为它们回答的是不同问题 ——
 把「调哪个系统」和「怎么调它」糅成一个开关，就没法表达
 「生产上走网关、本地调试直连」这种真实需求了。
 
-七路端口（通知 / 日程 / 订单 / 物流 / 库存 / 退款 / 工单）共用一张配置表，
-新增一路只需要在 `_PORT_TABLE` 里加一行 —— 逐个抄一遍构造逻辑，
-是新增端口时最容易漏改其中一处的地方。
+八个端口（物料 / 供应商 / 仓库 / 库存 / 采购 / 收货 / 对象存储 / 工单）
+共用一张配置表，新增一路只需要在 `_PORT_TABLE` 里加一行 —— 逐个抄一遍
+构造逻辑，是新增端口时最容易漏改其中一处的地方。
+
+构造出的每个端口都经 `resilience.wrap_port()` 套一层熔断代理（名字=动作名），
+三种后端共用同一套熔断名 —— 这样 `TOOL_GATEWAY=direct|mcp` 的行为才逐字段
+一致，而不是「直连会熔断、走网关不会」这种只在某条路径上存在的差异。
 """
 
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from functools import lru_cache
-from typing import Tuple
+from typing import Optional, Tuple
 
 from integrations.ports import IntegrationError
+from integrations.resilience import reset_breakers, wrap_port
 from utils.agent_logger import get_logger
 
 logger = get_logger("integration_factory")
@@ -53,40 +59,6 @@ def _use_mcp() -> bool:
     return gateway_mode() == "mcp"
 
 
-# ==================== 通知 / 日程 ====================
-
-@lru_cache(maxsize=1)
-def get_notify_port():
-    """获取通知端口（进程级单例）。"""
-    if _use_http():
-        from integrations.http.notify_http import WxWorkNotifyPort
-
-        logger.info("通知端口：企业微信（http）")
-        return WxWorkNotifyPort()
-
-    from integrations.mock.notify_mock import MockNotifyPort
-
-    logger.debug("通知端口：mock（不发起网络请求）")
-    return MockNotifyPort()
-
-
-@lru_cache(maxsize=1)
-def get_schedule_port():
-    """获取日程端口（进程级单例）。"""
-    if _use_http():
-        from integrations.http.notify_http import WxWorkSchedulePort
-
-        logger.info("日程端口：企业微信（http）")
-        return WxWorkSchedulePort()
-
-    from integrations.mock.notify_mock import MockSchedulePort
-
-    logger.debug("日程端口：mock（不发起网络请求）")
-    return MockSchedulePort()
-
-
-# ==================== 订单 / 物流 / 库存 / 退款 / 工单 ====================
-
 def _ensure_mcp_sdk() -> None:
     """MCP 模式下先确认 SDK 在位。
 
@@ -103,60 +75,66 @@ def _ensure_mcp_sdk() -> None:
 
 
 #: 动作名 -> (中文标签, http 类名, mock 模块名, mock 类名, mcp 类名)
-_PORT_TABLE: dict[str, Tuple[str, str, str, str, str]] = {
-    "order":     ("订单", "HttpOrderPort",     "order_mock",      "MockOrderPort",     "McpOrderPort"),
-    "logistics": ("物流", "HttpLogisticsPort", "logistics_mock",  "MockLogisticsPort", "McpLogisticsPort"),
-    "inventory": ("库存", "HttpInventoryPort", "inventory_mock",  "MockInventoryPort", "McpInventoryPort"),
-    "refund":    ("退款", "HttpRefundPort",    "after_sale_mock", "MockRefundPort",    "McpRefundPort"),
-    "handoff":   ("工单", "HttpHandoffPort",   "after_sale_mock", "MockHandoffPort",   "McpHandoffPort"),
+#:
+#: mcp_cls 为 None 表示**该端口不进 MCP 网关**（目前只有对象存储）：
+#: 附件写入是字节落盘、没有业务判断，网关的「薄包装 + 信封」没有增益，
+#: 而且唯一的调用方在网关服务端内部（mock 收货落质检报告），再穿一次
+#: 网关只是自己调自己。见 `integrations/ports.py::FilePort`。
+_PORT_TABLE: dict[str, Tuple[str, str, str, str, Optional[str]]] = {
+    "material":  ("物料",     "HttpMaterialPort",  "masterdata_mock", "MockMaterialPort",  "McpMaterialPort"),
+    "supplier":  ("供应商",   "HttpSupplierPort",  "masterdata_mock", "MockSupplierPort",  "McpSupplierPort"),
+    "warehouse": ("仓库",     "HttpWarehousePort", "masterdata_mock", "MockWarehousePort", "McpWarehousePort"),
+    "inventory": ("库存",     "HttpInventoryPort", "inventory_mock",  "MockInventoryPort", "McpInventoryPort"),
+    "purchase":  ("采购",     "HttpPurchasePort",  "purchase_mock",   "MockPurchasePort",  "McpPurchasePort"),
+    "receipt":   ("收货",     "HttpReceiptPort",   "receipt_mock",    "MockReceiptPort",   "McpReceiptPort"),
+    "file":      ("对象存储", "HttpFilePort",      "file_mock",       "MockFilePort",      None),
+    "handoff":   ("工单",     "HttpHandoffPort",   "handoff_mock",    "MockHandoffPort",   "McpHandoffPort"),
 }
 
 
 def _business_port(action: str):
-    """按 INTEGRATION_MODE × TOOL_GATEWAY 构造一个业务端口。"""
+    """按 INTEGRATION_MODE × TOOL_GATEWAY 构造一个业务端口，并套上熔断代理。"""
     label, http_cls, mock_module, mock_cls, mcp_cls = _PORT_TABLE[action]
 
-    if _use_mcp():
+    if _use_mcp() and mcp_cls:
         _ensure_mcp_sdk()
 
         from integrations.mcp import ports as mcp_ports
 
         logger.info(f"{label}端口：mcp（经 MCP 网关，背后是 {integration_mode()}）")
-        return getattr(mcp_ports, mcp_cls)()
-
-    if _use_http():
+        impl = getattr(mcp_ports, mcp_cls)()
+    elif _use_http():
         from integrations.http import business_http
 
         logger.info(f"{label}端口：http（真实业务系统）")
-        return getattr(business_http, http_cls)()
+        impl = getattr(business_http, http_cls)()
+    else:
+        module = importlib.import_module(f"integrations.mock.{mock_module}")
 
-    from integrations.mock import (
-        after_sale_mock,
-        inventory_mock,
-        logistics_mock,
-        order_mock,
-    )
+        logger.debug(f"{label}端口：mock（读种子数据，零网络）")
+        impl = getattr(module, mock_cls)()
 
-    logger.debug(f"{label}端口：mock（读种子数据，零网络）")
-    modules = {
-        "order_mock": order_mock,
-        "logistics_mock": logistics_mock,
-        "inventory_mock": inventory_mock,
-        "after_sale_mock": after_sale_mock,
-    }
-    return getattr(modules[mock_module], mock_cls)()
+    # 熔断名 = 动作名（与 MOCK_FAIL_ACTIONS 同一套词）。三种后端共用，
+    # direct / mcp 的熔断行为才对齐。
+    return wrap_port(action, impl)
 
 
 @lru_cache(maxsize=1)
-def get_order_port():
-    """获取订单主数据端口（进程级单例）。"""
-    return _business_port("order")
+def get_material_port():
+    """获取物料主数据端口（进程级单例）。"""
+    return _business_port("material")
 
 
 @lru_cache(maxsize=1)
-def get_logistics_port():
-    """获取物流轨迹端口（进程级单例）。"""
-    return _business_port("logistics")
+def get_supplier_port():
+    """获取供应商端口（进程级单例）。"""
+    return _business_port("supplier")
+
+
+@lru_cache(maxsize=1)
+def get_warehouse_port():
+    """获取仓库端口（进程级单例）。"""
+    return _business_port("warehouse")
 
 
 @lru_cache(maxsize=1)
@@ -166,9 +144,21 @@ def get_inventory_port():
 
 
 @lru_cache(maxsize=1)
-def get_refund_port():
-    """获取退款端口（进程级单例）。"""
-    return _business_port("refund")
+def get_purchase_port():
+    """获取采购端口（进程级单例）。"""
+    return _business_port("purchase")
+
+
+@lru_cache(maxsize=1)
+def get_receipt_port():
+    """获取收货端口（进程级单例）。"""
+    return _business_port("receipt")
+
+
+@lru_cache(maxsize=1)
+def get_file_port():
+    """获取对象存储端口（进程级单例；不进 MCP 网关，始终本地直连）。"""
+    return _business_port("file")
 
 
 @lru_cache(maxsize=1)
@@ -184,21 +174,31 @@ def reset_ports() -> None:
     子进程启动那一刻就固定了；只清端口缓存而留着旧会话，会让新注入的
     `MOCK_FAIL_ACTIONS` / `INTEGRATION_MODE` 送不到网关进程里去 ——
     表面上看端口是新建的，实际还在用旧环境的老子进程。
+
+    熔断器与 HTTP 连接池也一样：故障撤掉之后还留着 OPEN 的熔断器，
+    下一个场景会先吃几次「无辜的快速失败」，「恢复」这件事就演不出来了。
     """
     for getter in (
-        get_notify_port,
-        get_schedule_port,
-        get_order_port,
-        get_logistics_port,
+        get_material_port,
+        get_supplier_port,
+        get_warehouse_port,
         get_inventory_port,
-        get_refund_port,
+        get_purchase_port,
+        get_receipt_port,
+        get_file_port,
         get_handoff_port,
     ):
         getter.cache_clear()
 
-    # 看「bridge 有没有被 import 过」而不是「当前是不是 mcp 模式」：
-    # 环境变量在重置前后可能不同，而已经拉起来的子进程必须关掉，
-    # 否则它会带着旧环境一直活着。没导入过就没有会话，也就没什么要关的。
+    # 看「模块有没有被 import 过」而不是「当前是不是那个模式」：
+    # 环境变量在重置前后可能不同，而已经拉起来的资源必须按现状关掉。
+    # 没导入过就没有资源，也就没什么可清的。
     bridge = sys.modules.get("integrations.mcp.bridge")
     if bridge is not None:
         bridge.reset_session()
+
+    business_http = sys.modules.get("integrations.http.business_http")
+    if business_http is not None:
+        business_http.reset_http_session()
+
+    reset_breakers()

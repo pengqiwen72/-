@@ -338,10 +338,15 @@ class ReceiptPlan(ScmBaseModel):
 
     `defect_rate` 由 `compute_defect_rate` 统一计算：口径只有一处，
     策略引擎的阈值判定与展示文案读的是同一个值。
+
+    `biz_id` 是登记号（由要素确定性生成，同输入必同号，幂等锚点）；
+    `receipt_no` 是 WMS 执行成功后回填的正式单号 —— 展示一律
+    「有正式用正式」，否则同一批货会冒出两个都叫「收货单号」的数字。
     '''
 
     plan_id: str = Field(default="", description="方案 ID，由 biz_id 确定性生成（uuid5）")
-    biz_id: str = Field(default="", description="业务单号：RC 开头的收货单号")
+    biz_id: str = Field(default="", description="业务单号：RC 开头的收货登记号，由要素确定性生成")
+    receipt_no: str = Field(default="", description="WMS 正式收货单号，执行成功后回填")
     po_no: str = Field(default="", description="关联的采购订单号")
     material_code: str = Field(default="", description="物料编码")
     material_name: str = Field(default="", description="物料名称")
@@ -388,8 +393,9 @@ class ReceiptPlan(ScmBaseModel):
         ]
         if self.disposition:
             lines.append(f"处置：{self.disposition}")
-        if self.biz_id:
-            lines.append(f"收货单号：{self.biz_id}")
+        number = self.receipt_no or self.biz_id
+        if number:
+            lines.append(f"收货单号：{number}")
         return "\n".join(p for p in lines if p)
 
 

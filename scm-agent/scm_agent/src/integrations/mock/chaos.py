@@ -9,7 +9,7 @@ mock 的故障注入开关。
     MOCK_FAIL_ACTIONS=inventory  让库存这一路直接抛错，演示降级分支
 
 `MOCK_FAIL_ACTIONS` 针对的是**动作名**（按端口命名：material / supplier /
-warehouse / inventory / purchase / receipt …），不是某个单号。演示要的是
+warehouse / inventory / purchase / receipt / file / handoff），不是某个单号。演示要的是
 「库存这一路挂了」，而不是「这一单刚好查不到」—— 后者是业务上的空结果，
 走的是另一条分支（NotFound / 空结果），两者必须能分别演示。
 

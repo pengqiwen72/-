@@ -20,6 +20,7 @@
 
 from langchain_core.runnables import RunnableConfig
 from graphs.scm_graph.scm_state import ScmState, ScmStateField, ConfigurableField
+from integrations.resilience import CircuitOpen
 from tools.store_tool import (
     get_materials,
     get_operator_info,
@@ -68,6 +69,10 @@ def _loaded(node: NodeName, field: ScmStateField, value, message: str):
 def _failed(node: NodeName, field: ScmStateField, fallback, message: str, error: Exception):
     """装载失败的返回结构：空值 + code=1，不抛。"""
     logger.error(f"{message}: {error}")
+    if isinstance(error, CircuitOpen):
+        # 熔断的快速失败要在执行轨迹里一眼可辨：否则和第 1~3 次真失败
+        # 长得一模一样，「第 4 次不再等上游超时」这个演示点只在日志里。
+        message = f"{message}（接口熔断中，快速失败）"
     return {
         field: fallback,
         ScmStateField.NODE_RESULT: [NodeResult(

@@ -1,13 +1,15 @@
 """
-库存 mock（仓储 WMS）。
+库存 mock（WMS）。
 
-返回空列表表示「这个 SKU 在 WMS 里没有记录」，是**业务上的空结果**，
-由调用方决定怎么表述（多数情况下对应「该仓不备此货」）。与接口异常区分开。
+按 WMS 库存查询接口的形状返回：matCode / whCode / onHandQty / frozenQty /
+safetyQty / avgOut30d —— **上游不给「可用量」**，可用量（在库 − 冻结）是业务
+口径，由 `models/scm_models.py::StockItem` 的属性和归一后的模型计算，
+不向下游要一个我们已经会算的数字。
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from integrations.mock import chaos, seed_source
 from integrations.ports import InventoryPort
@@ -16,23 +18,33 @@ from utils.agent_logger import get_logger
 logger = get_logger("inventory_mock")
 
 
-class MockInventoryPort(InventoryPort):
-    """读 `data/seed/inventory.json`，按 WMS 的字段形状返回。"""
+def _norm(code: str) -> str:
+    return (code or "").strip().upper()
 
-    def get_stock(self, sku_ids: List[str], warehouse: Optional[str] = None) -> List[Dict[str, Any]]:
+
+class MockInventoryPort(InventoryPort):
+    """读 `data/seed/stock.json`（120 个 物料 × 仓库 库存点）。"""
+
+    def list_stock(self) -> List[Dict[str, Any]]:
+        chaos.apply("inventory")
+        return seed_source.stock_raw()
+
+    def list_stock_by_material(self, material_code: str) -> List[Dict[str, Any]]:
         chaos.apply("inventory")
 
-        wanted = {s.strip() for s in (sku_ids or []) if s and s.strip()}
-        if not wanted:
+        key = _norm(material_code)
+        if not key:
             return []
+        hit = [r for r in seed_source.stock_raw() if r["matCode"] == key]
+        logger.debug(f"[MOCK WMS] 物料 {key} 命中 {len(hit)} 个库存点")
+        return hit
 
-        rows = []
-        for row in seed_source.inventory_raw():
-            if row.get("skuCode") not in wanted:
-                continue
-            if warehouse and row.get("warehouseName") != warehouse:
-                continue
-            rows.append(row)
+    def list_stock_by_warehouse(self, warehouse_code: str) -> List[Dict[str, Any]]:
+        chaos.apply("inventory")
 
-        logger.debug(f"[MOCK 仓储] 查询 {sorted(wanted)} 命中 {len(rows)} 行")
-        return rows
+        key = _norm(warehouse_code)
+        if not key:
+            return []
+        hit = [r for r in seed_source.stock_raw() if r["whCode"] == key]
+        logger.debug(f"[MOCK WMS] 仓库 {key} 命中 {len(hit)} 个库存点")
+        return hit

@@ -147,7 +147,7 @@ def test_no_clear_intention_reaches_the_talk_subgraph_with_the_input(runner):
     assert "供应链" in message or "可以帮你" in message, "兜底要说明自身能力边界"
 
 
-# ==================== 场景路由闸：15 条演示输入各归其位 ====================
+# ==================== 场景路由闸：16 条演示输入各归其位 ====================
 
 #: 场景 key -> 它应当落到的子图名。演示场景的「输入」是自然语言，
 #: 靠第二层语义路由分发 —— 词表一动就可能走错链路，所以在这里全部钉死。
@@ -156,6 +156,7 @@ SCENARIO_ROUTES = {
     "material_qa_relation": "material_qa",     # 替代料问题同走问答子图（图谱通道在子图内分流）
     "qa_miss":              "material_qa",
     "qa_degraded":          "material_qa",
+    "load_degraded":        "inventory_query",  # 故障注入在装载链路，业务流转仍归库存
     "inventory_query":      "inventory_query",
     "inventory_low":        "inventory_query",
     "supplier_compare":     "supplier_query",

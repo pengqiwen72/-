@@ -38,9 +38,13 @@ Phase 6 有「两路排名必须相同」的比对测试。改公式要同时改
 
 降级语义
 --------
-`retrieve()` 是图谱通道的入口，**永不抛出**：缺驱动、连不上、故障注入，
-一律 `degrade.mark(L1)` 后返回空列表，把问题让给文档通道或转人工。
-故障注入走现成的 `MOCK_FAIL_ACTIONS=graph`（与 mock 端口的 apply 同一开关）。
+`retrieve()` 是图谱通道的入口，**永不抛出**：缺驱动、连不上、故障注入、
+熔断快速失败，一律 `degrade.mark(L1)` 后返回空列表，把问题让给文档通道
+或转人工。故障注入走现成的 `MOCK_FAIL_ACTIONS=graph`（与 mock 端口的
+apply 同一开关）；连续失败到阈值（默认 3，`BREAKER_FAIL_THRESHOLD`）后
+`get_breaker("graph")` 打开，后续调用在 `_guard()` 处快速失败，冷却
+（默认 20 秒，`BREAKER_RESET_SECONDS`）结束后放一个探针试探 ——
+「前三次真失败、第四次快速失败」正是 `load_degraded` 场景演的东西。
 """
 
 from __future__ import annotations
@@ -323,16 +327,28 @@ def route_relation(text: str) -> Tuple[str, ...]:
 
 
 def retrieve(text: str) -> List[GraphChunk]:
-    """图谱通道入口（供检索链路调用）。**永不抛出**，失败降级 L1 返回空。"""
+    """图谱通道入口（供检索链路调用）。**永不抛出**，失败降级 L1 返回空。
+
+    熔断记账放在这一层（而不是 `_guard` 里）：成功（含「没定位到物料」的
+    早退）记成功，真实失败记失败，被熔断挡下的调用**不记账** ——
+    否则每次快速失败都会把冷却期往后推，冷却永远不会到期，恢复就演不出来。
+    """
     kinds = route_relation(text)
     if not kinds:
         return []
 
+    # 函数级 import：kg 保持轻依赖，不把 integrations 拉进模块导入期
+    from integrations.resilience import CircuitOpen, get_breaker
+
+    breaker = get_breaker("graph")
     try:
         _guard()
         store = get_graph_store()
         code = link_material(text, store)
         if not code:
+            # 「没定位到物料」是这次问题里没有可链接的实体，不是故障：
+            # 记成功，别让它把熔断器推向打开
+            breaker.record_success()
             emit("graph_link", detail="没有定位到物料，图谱通道本次不参与")
             return []
         emit("graph_link", detail=f"定位到物料 {code}")
@@ -351,11 +367,18 @@ def retrieve(text: str) -> List[GraphChunk]:
             material_code=code,
             graph_facts=len(facts),
         )
+        breaker.record_success()
         return as_chunks(facts)
     except GraphStoreUnavailable as e:
+        breaker.record_failure()
+        degrade_mod.mark(degrade_mod.DegradeLevel.L1, str(e))
+        return []
+    except CircuitOpen as e:
+        # 熔断挡下的调用：按 L1 记降级，但不算「又一次失败」
         degrade_mod.mark(degrade_mod.DegradeLevel.L1, str(e))
         return []
     except Exception as e:  # 图后端的任何异常都按「图谱不可用」处理，不牵连问答主链路
+        breaker.record_failure()
         degrade_mod.mark(degrade_mod.DegradeLevel.L1, f"图谱查询异常：{e}")
         return []
 
@@ -380,12 +403,24 @@ def as_chunks(facts: Sequence[GraphFact]) -> List[GraphChunk]:
 # ================================================================ 内部
 
 def _guard() -> None:
-    """故障注入探针：`MOCK_FAIL_ACTIONS=graph` 时让图谱调用直接抛错。
+    """图谱通道的入口守卫：先问熔断器，再看故障注入。
 
-    与 mock 端口的 `chaos.apply()` 是同一个开关的同一套语义 —— L1 降级演示
-    用它，不另造强制开关。Phase 4 的熔断器也接在这同一个位置上。
+    熔断器在前：确认在坏（连续失败到阈值）时连「这次要不要试一下」都省了，
+    直接快速失败 —— 这正是熔断的意义。冷却结束后 `allow()` 放行一个探针，
+    探针走到下面的真实查询，失败会重新打开。
+
+    故障注入与 mock 端口的 `chaos.apply()` 是同一个开关的同一套语义 ——
+    L1 降级演示用它，不另造强制开关。
     """
     from integrations.mock.chaos import failing_actions
+    from integrations.resilience import CircuitOpen, get_breaker
+
+    breaker = get_breaker("graph")
+    if not breaker.allow():
+        raise CircuitOpen(
+            f"图谱服务熔断中：连续 {breaker.consecutive_failures} 次失败，"
+            f"快速失败（冷却 {breaker.reset_seconds:g} 秒）"
+        )
 
     if "graph" in failing_actions():
         raise GraphStoreUnavailable(

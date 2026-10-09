@@ -20,7 +20,8 @@ Phase 2 的简化之处（都标了 TODO，Phase 5 换掉时调用点不动）
 ------------------------------------------------------------
 * 复核阈值写死 2%，Phase 5 换成 `data/seed/quality_policy.json` 的策略引擎
   （QC-001 不良率 > 2% 需复核 等）。
-* `_submit` 还没有下游端口（Phase 4 建 `get_receipt_port()`），先返回确定性回执。
+* `_submit` 已接上收货端口（Phase 4）：登记落 WMS、质检报告归档对象存储。
+  上游报文的 rcvNo / qtyActual 差异由 normalize 收口，执行节点只认内部口径。
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from graphs.scm_graph.sub_goods_receipt.sub_goods_receipt_state import (
     SubGoodsReceiptState,
     SubGoodsReceiptStateField,
 )
+from integrations.factory import get_receipt_port
 from integrations.idempotency import (
     IdempotencyConflict,
     IdempotencyGuard,
@@ -43,6 +45,7 @@ from integrations.idempotency import (
     build_plan_id,
     build_receipt_id,
 )
+from integrations.normalize import normalize_receipt
 from llm.llm_receipt_draft import llm_receipt_draft
 from models.scm_models import NodeResult, PurchaseOrderInfo, ReceiptPlan, TaskResult
 from observability.progress import emit, node_done
@@ -356,6 +359,8 @@ def execute_node(state: SubGoodsReceiptState, config: RunnableConfig):
         replayed = plan.model_copy(update={
             "status": "replayed",
             "replayed": True,
+            # 回填首次执行的正式单号，最终展示与首次执行逐字一致
+            "receipt_no": str((record.result or {}).get("receipt_no", "") or ""),
             "message": (
                 f"这笔到货之前已经登记过了（收货单 {record.result.get('receipt_no', plan.biz_id)}），"
                 f"本次没有重复入库。"
@@ -377,24 +382,43 @@ def execute_node(state: SubGoodsReceiptState, config: RunnableConfig):
 
     updated = plan.model_copy(update={
         "status": "executed",
+        # 正式单号回填进方案（与电商侧 refund_id 同一手法）：
+        # 最终 render 的「收货单号」与实际登记到 WMS 的号只差这一步回填
+        "receipt_no": str(result.get("receipt_no") or ""),
         "message": _executed_message(plan, result),
     })
     return _done(updated, f"已执行（{plan.disposition}）")
 
 
 def _submit(plan: ReceiptPlan) -> Dict[str, Any]:
-    """把收货结果提交下游（入库单 / 退货单）。
+    """把收货结果提交下游（WMS 收货登记 + 质检报告归档），经收货端口。
 
-    TODO(Phase 4/5)：换成 `get_receipt_port().submit_receipt(...)`。
-    现在返回**确定性回执**（收货单号就是确定性的 biz_id），先把幂等这一环跑通；
-    端口接上后 `execute_node` 一行都不用改。刻意不直接写 store，理由见
-    `sub_purchase_request_node._submit`。
+    上游报文的差异（rcvNo / qtyActual / reportUrl）由 normalize 收口成内部口径，
+    `execute_node` 与 `_executed_message` 只认 receipt_no / qty_stored /
+    qty_returned —— 与装载链路走同一套归一，不在这里再造一份映射。
+
+    幂等键与本地幂等守卫用同一个 key：守卫管「同一笔业务不重复执行」，
+    上游那串 key 管「网络重试、并发请求到了 WMS 也不重复登记」。
     """
+    record = get_receipt_port().submit_receipt({
+        "po_no": plan.po_no,
+        "qty_received": plan.qty_received,
+        "qty_defect": plan.qty_defect,
+        "defect_type": plan.defect_type,
+        "disposition": plan.disposition,
+        "warehouse_code": plan.warehouse_code,
+        "inspector": plan.inspector,
+        "idempotency_key": build_key(plan.biz_id, "goods_receipt"),
+    })
+
+    receipt = normalize_receipt(record)
     return {
-        "receipt_no": plan.biz_id,
+        # 收货单号以上游（WMS）为准；上游没给才退回确定性单号
+        "receipt_no": receipt["receipt_no"] or plan.biz_id,
         "disposition": plan.disposition,
         "qty_stored": max(plan.qty_received - plan.qty_defect, 0),
         "qty_returned": plan.qty_defect,
+        "report_url": receipt["report_url"],
     }
 
 

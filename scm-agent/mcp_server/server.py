@@ -1,5 +1,5 @@
 """
-网关暴露的八个业务工具（订单 / 物流 / 库存 / 售后）。
+网关暴露的十八个供应链业务工具（物料 / 供应商 / 仓库 / 库存 / 采购 / 收货 / 工单）。
 
 工具契约
 --------
@@ -9,16 +9,18 @@
     {"ok": false, "error": "not_found|unavailable|invalid|internal", "message": "..."}
 
 不这么做的代价见 `scm_agent/src/integrations/mcp/envelope.py` 的注释：
-MCP 只有一个 `is_error`，分不出「这单没发货所以没有物流轨迹」和「快递接口超时」，
-而这两件事在客服链路里一个要如实回答、一个要降级转人工。
+MCP 只有一个 `is_error`，分不出「写链路引用的物料不存在」和「ERP 接口超时」，
+而这两件事一个要如实转述、一个要降级或快速失败。
 
 三个刻意的留白
 --------------
-1. **原样转发，不做字段映射。** `get_order` 吐出来的还是订单中台那套
-   `orderNo` / `tradeStatus` / `payFee`。归一化留在 Agent 侧：网关一旦开始
-   改名换单位，就等于在三套端口实现之间凭空插进第四套口径，而它只在
-   `TOOL_GATEWAY=mcp` 时才生效。
-2. **不做业务判断。** 不存在的东西直接问上游，网关不预先查一遍再说「不存在」。
+1. **原样转发，不做字段映射。** `list_materials` 吐出来的还是 ERP 那套
+   `matCode` / `refPrice`（分）/ `orderStatus`（两位码）。归一化留在 Agent 侧：
+   网关一旦开始改名换单位，就等于在三套端口实现之间凭空插进第四套口径，
+   而它只在 `TOOL_GATEWAY=mcp` 时才生效。
+2. **不做业务判断。** 不存在的东西直接问上游，网关不预先查一遍再说「不存在」；
+   `list_supplier_quotes` 只给报价事实，不排名 —— 评分口径属于 Agent 侧
+   （sub_supplier）与图谱侧（kg/query.py），网关再放一份就是第三个副本。
 3. **不做缓存。** 缓存要按「谁的数据、多久算旧」来定，那是业务决策；
    网关只负责把请求转给真实系统。
 
@@ -29,6 +31,7 @@ MCP 只有一个 `is_error`，分不出「这单没发货所以没有物流轨�
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from mcp.server.mcpserver import MCPServer
@@ -37,14 +40,16 @@ from integrations.mcp.envelope import wrap, wrap_error
 
 server = MCPServer(
     name="scm-business-tools",
-    title="电商客服业务工具网关",
+    title="供应链业务工具网关",
     version="1.0.0",
     instructions=(
-        "面向电商客服场景的业务工具集：查订单、查物流、查库存、发起退款、"
-        "查退款单、建转人工工单。\n"
-        "所有工具都返回统一信封：成功时 data 里是上游业务系统的原样报文，"
-        "失败时 error 给出 not_found / unavailable / invalid / internal 四类错误码。\n"
-        "注意区分 not_found（业务上查不到，是正常结论）与 unavailable"
+        "面向供应链采购仓储场景的业务工具集：查物料、查供应商与报价、查仓库与库存、"
+        "下达采购订单、登记收货、建转人工工单。\n"
+        "所有工具都返回统一信封：成功时 data 里是上游业务系统的原样报文"
+        "（ERP/SRM/WMS 各自的字段口径，未做归一），"
+        "失败时 error 给出 not_found / unavailable / invalid / internal 四类错误码，"
+        "并附原始异常类名（exception 字段）。\n"
+        "注意区分 not_found（业务上查不到 / 写链路引用了不存在的实体）与 unavailable"
         "（系统故障，应重试或降级）。"
     ),
 )
@@ -63,16 +68,22 @@ def _run(fn) -> Dict[str, Any]:
         return wrap_error(e)
 
 
-def _order():
-    from integrations.factory import get_order_port
+def _material():
+    from integrations.factory import get_material_port
 
-    return get_order_port()
+    return get_material_port()
 
 
-def _logistics():
-    from integrations.factory import get_logistics_port
+def _supplier():
+    from integrations.factory import get_supplier_port
 
-    return get_logistics_port()
+    return get_supplier_port()
+
+
+def _warehouse():
+    from integrations.factory import get_warehouse_port
+
+    return get_warehouse_port()
 
 
 def _inventory():
@@ -81,10 +92,16 @@ def _inventory():
     return get_inventory_port()
 
 
-def _refund():
-    from integrations.factory import get_refund_port
+def _purchase():
+    from integrations.factory import get_purchase_port
 
-    return get_refund_port()
+    return get_purchase_port()
+
+
+def _receipt():
+    from integrations.factory import get_receipt_port
+
+    return get_receipt_port()
 
 
 def _handoff():
@@ -93,61 +110,126 @@ def _handoff():
     return get_handoff_port()
 
 
-# ==================== 订单 ====================
+# ==================== 物料 ====================
 
-@server.tool(description="按订单号查询订单主数据。返回上游原样报文（orderNo/tradeStatus/payFee/收货地址等）。订单不存在时返回 ok=false, error=not_found。")
-def get_order(order_id: str) -> Dict[str, Any]:
-    return _run(lambda: _order().get_order(order_id))
-
-
-@server.tool(description="查询某个客户（unionId）名下的订单列表，按时间倒序。客户问「我的订单」时用这个，别拿手机号当 customer_id。")
-def list_orders_by_customer(customer_id: str, limit: int = 20) -> Dict[str, Any]:
-    return _run(lambda: _order().list_orders_by_customer(customer_id, limit))
+@server.tool(description="查询全量物料主数据（ERP）。返回上游原样报文（matCode/matName/specModel/matGroup/baseUnit/refPrice 分/substituteCodes）。装载与全量同步用。")
+def list_materials() -> Dict[str, Any]:
+    return _run(lambda: _material().list_materials())
 
 
-@server.tool(description="按下单时间区间拉订单，start/end 格式为 yyyy-MM-dd（含当天）。数据来自报表库，用于统计与周报，不是实时数据。")
-def list_orders_by_range(start: str, end: str, limit: int = 500) -> Dict[str, Any]:
-    return _run(lambda: _order().list_orders_by_range(start, end, limit))
+@server.tool(description="按关键词搜索物料（编码或名称片段，如「冷轧钢板」「M100023」）。口语化指称落到具体物料时用这个。")
+def search_materials(keyword: str, limit: int = 20) -> Dict[str, Any]:
+    return _run(lambda: _material().search_materials(keyword, limit))
 
 
-# ==================== 物流 ====================
-
-@server.tool(description="按订单号查询物流轨迹。返回承运商、运单号与轨迹节点列表。未发货或查不到轨迹时返回 ok=false, error=not_found —— 这是业务结论，不是故障。")
-def get_logistics(order_id: str) -> Dict[str, Any]:
-    return _run(lambda: _logistics().get_trace(order_id))
+@server.tool(description="按物料编码查询单条物料主数据。物料不存在时返回 ok=false, error=not_found。")
+def get_material(material_code: str) -> Dict[str, Any]:
+    return _run(lambda: _material().get_material(material_code))
 
 
-# ==================== 库存 ====================
-
-@server.tool(description="批量查询 SKU 库存。sku_ids 一次可传多个（建议不超过 20 个）以减少往返。warehouse 为空表示全部仓库合计。")
-def get_stock(sku_ids: List[str], warehouse: Optional[str] = None) -> Dict[str, Any]:
-    return _run(lambda: _inventory().get_stock(sku_ids, warehouse))
+@server.tool(description="查询某物料登记在册的替代料（返回替代料自身的主数据）。没有登记替代料时返回空列表 —— 那是业务上的「没有」，不是故障。")
+def list_substitutes(material_code: str) -> Dict[str, Any]:
+    return _run(lambda: _material().list_substitutes(material_code))
 
 
-# ==================== 售后 ====================
+# ==================== 供应商 ====================
+
+@server.tool(description="查询全量供应商档案（SRM）。返回含履约指标的报文（supCode/isNewSup/leadDays/onTimeRate/defectRate）。")
+def list_suppliers() -> Dict[str, Any]:
+    return _run(lambda: _supplier().list_suppliers())
+
+
+@server.tool(description="按供应商编码查询单条档案。供应商不存在时返回 ok=false, error=not_found。")
+def get_supplier(supplier_code: str) -> Dict[str, Any]:
+    return _run(lambda: _supplier().get_supplier(supplier_code))
+
+
+@server.tool(description="查询某物料各家供应商的报价（SRM）。只给报价事实（quotPrice 分/minOrderQty/validDays），不做评分排名 —— 排名口径在 Agent 侧。")
+def list_supplier_quotes(material_code: str) -> Dict[str, Any]:
+    return _run(lambda: _supplier().list_supplier_quotes(material_code))
+
+
+# ==================== 仓库 / 库存 ====================
+
+@server.tool(description="查询全量仓库档案（WMS）：whCode/whName/city/addr。")
+def list_warehouses() -> Dict[str, Any]:
+    return _run(lambda: _warehouse().list_warehouses())
+
+
+@server.tool(description="查询全量库存快照（WMS，物料 × 仓库）。上游给四个原始量（onHandQty/frozenQty/safetyQty/avgOut30d），可用量由业务侧计算。")
+def list_stock() -> Dict[str, Any]:
+    return _run(lambda: _inventory().list_stock())
+
+
+@server.tool(description="查询某物料在各仓库的库存分布。库存查询与调拨判断的输入。")
+def list_stock_by_material(material_code: str) -> Dict[str, Any]:
+    return _run(lambda: _inventory().list_stock_by_material(material_code))
+
+
+@server.tool(description="查询某仓库里各物料的库存（盘点视角）。")
+def list_stock_by_warehouse(warehouse_code: str) -> Dict[str, Any]:
+    return _run(lambda: _inventory().list_stock_by_warehouse(warehouse_code))
+
+
+# ==================== 采购 ====================
 
 @server.tool(description=(
-    "发起退款。request 字段：order_id、action_type（如 auto_refund / manual_refund）、"
-    "amount（元）、refund_type、policy_id（依据的售后政策）、"
-    "idempotency_key（**必填**，同一笔业务重复提交必须复用同一个键，"
-    "否则会重复扣款）。"
+    "下达采购订单（ERP，写操作）。request 字段：request_id、material_code、qty、unit、"
+    "unit_price（元）、amount（元）、supplier_code、target_warehouse、operator_id、"
+    "idempotency_key（**必填**，同一笔业务重复提交必须复用同一个键，否则会重复下单）。"
+    "引用的物料 / 供应商不存在时返回 ok=false, error=not_found。"
 ))
-def submit_refund(request: Dict[str, Any]) -> Dict[str, Any]:
-    return _run(lambda: _refund().submit_refund(dict(request or {})))
+def create_purchase_order(request: Dict[str, Any]) -> Dict[str, Any]:
+    return _run(lambda: _purchase().create_purchase_order(dict(request or {})))
 
 
-@server.tool(description="按退款单号查询退款单状态与金额。用于回查之前提交的退款是否已到账。")
-def get_refund(refund_id: str) -> Dict[str, Any]:
-    return _run(lambda: _refund().get_refund(refund_id))
+@server.tool(description="按采购单号回查采购订单（原材料 + 运行期下达的单）。查不到返回 ok=false, error=not_found。")
+def get_purchase_order(po_no: str) -> Dict[str, Any]:
+    return _run(lambda: _purchase().get_purchase_order(po_no))
+
+
+@server.tool(description="查询全量采购订单（种子单 + 运行期下达的单，按单号排序）。装载链路用。")
+def list_purchase_orders() -> Dict[str, Any]:
+    return _run(lambda: _purchase().list_purchase_orders())
+
+
+# ==================== 收货 / 工单 ====================
+
+@server.tool(description=(
+    "登记收货并归档质检报告（WMS，写操作）。request 字段：po_no、qty_received、qty_defect、"
+    "defect_type、disposition、warehouse_code、inspector、"
+    "idempotency_key（**必填**）。应收数量与供应商由采购单反查，无需复述。"
+    "引用的采购单不存在时返回 ok=false, error=not_found。"
+))
+def submit_receipt(request: Dict[str, Any]) -> Dict[str, Any]:
+    return _run(lambda: _receipt().submit_receipt(dict(request or {})))
+
+
+@server.tool(description="按收货单号回查收货记录（含质检报告 URL，若有归档）。查不到返回 ok=false, error=not_found。")
+def get_receipt(receipt_no: str) -> Dict[str, Any]:
+    return _run(lambda: _receipt().get_receipt(receipt_no))
 
 
 @server.tool(description=(
-    "创建转人工工单。request 字段：customer_id、reason（转人工原因）、"
-    "summary（简要描述）、priority、thread_id、contact。"
+    "创建转人工工单。request 字段：reason（转人工原因）、summary（简要描述）、"
+    "priority、thread_id、operator_id。"
     "机器人在置信度不足、涉及敏感诉求或多次兜底失败时建单。"
 ))
 def create_ticket(request: Dict[str, Any]) -> Dict[str, Any]:
     return _run(lambda: _handoff().create_ticket(dict(request or {})))
+
+
+# ==================== 连通性 ====================
+
+@server.tool(description="连通性探测：返回网关进程状态与后端模式（INTEGRATION_MODE）。排查「网关是否活着、背后指向 mock 还是真实系统」时先调它。")
+def ping() -> Dict[str, Any]:
+    return _run(lambda: {
+        "status": "ok",
+        "server": "scm-business-tools",
+        "integration_mode": (os.getenv("INTEGRATION_MODE") or "mock").strip().lower(),
+        # 网关进程永远直连（bridge 侧强制 TOOL_GATEWAY=direct），列出来是让调用方看见
+        "tool_gateway": "direct",
+    })
 
 
 def main() -> None:

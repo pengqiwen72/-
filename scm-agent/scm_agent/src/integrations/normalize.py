@@ -3,36 +3,45 @@
 
 为什么不把「统一结构」交给各适配器自己保证
 ------------------------------------------
-如果每个适配器各写一份映射，同一份规则就被抄了 N 遍：订单中台改一个字段名，
-要在所有适配器、所有调用点同步改，漏一处就是线上读空字段。所以映射规则集中
-在这里，适配器只负责「把上游返回原样交出来」，归一是**显式的一步**，
-出错能定位到是哪一家的哪条规则。
+如果每个适配器各写一份映射，同一份规则就被抄了 N 遍：ERP 物料模块改一个
+字段名，要在所有适配器、所有调用点同步改，漏一处就是线上读空字段。所以
+映射规则集中在这里，适配器只负责「把上游返回原样交出来」，归一是**显式的
+一步**（装载层、收货链路都在调），出错能定位到是哪一家的哪条规则。
 
-真实上游的三种形状（也就是 mock 适配器刻意模仿的形状）
+四种上游系统的形状（也就是 mock 适配器刻意模仿的形状）
 ------------------------------------------------------
-    订单中台  {"orderNo": "SO...", "tradeStatus": 40, "payFee": 19900,
-               "gmtCreate": 1773..., "receiverInfo": {...}, "itemList": [...]}
-    快递查询  {"waybillNo": "SF...", "expressCompany": "顺丰速运",
-               "state": "派送中", "data": [{"ftime": "...", "context": "..."}]}
-    仓储 WMS  {"skuCode": "SKU-...", "warehouseName": "华东仓",
-               "qtyAvailable": 320, "qtyReserved": 12, "restockEta": ""}
+    ERP 物料   {"matCode": "M100023", "matName": "冷轧钢板 1.2mm",
+                "specModel": "...", "matGroup": "...", "baseUnit": "kg",
+                "refPrice": 560, "substituteCodes": ["M100031"]}
+    SRM 供应商 {"supCode": "S004", "isNewSup": false, "leadDays": 5,
+                "onTimeRate": 0.96, "defectRate": 0.012, ...}
+    SRM 报价   {"matCode": "...", "supCode": "...", "quotPrice": 550,
+                "minOrderQty": 500, "validDays": 30}
+    WMS 库存   {"matCode": "...", "whCode": "WH02", "onHandQty": 320,
+                "frozenQty": 12, "safetyQty": 400, "avgOut30d": 26.5}
+    ERP 采购   {"poNo": "...", "orderStatus": "30", "unitPrice": 560,
+                "totalAmt": 448000, "gmtCreate": 1773...}
+    WMS 收货   {"rcvNo": "RC...", "qtyPlan": 8000, "qtyActual": 7920,
+                "qtyBad": 80, "badType": "锈蚀", "checker": "..."}
 
 对不上的地方一共四类，这也是归一层要处理的全部内容：
 
-  1. **命名口径**：订单号 orderNo / 运单号 waybillNo / 商品编码 skuCode，
-     同一个概念在三家有三个名字 —— 别名表解决。
-  2. **枚举口径**：订单中台用 10/20/30/40/50，内部统一用 100/200/300/400/500；
-     快递接口干脆只给中文状态 —— 状态表解决。
-  3. **单位与量纲**：金额有的给「分」有的给「元」，时间有的是毫秒时间戳、
-     有的是 `yyyy-MM-dd HH:mm:ss` 字符串 —— 按**来源字段名**判单位，不猜数值。
-  4. **结构层级**：收货地址有的是嵌套 dict，有的是平铺字符串 —— 扁平化成一行。
+  1. **命名口径**：物料编码有 matCode，供应商编码有 supCode，仓库编码有
+     whCode —— 同一个概念在四家系统各有各的叫法 —— 别名表解决。
+  2. **枚举口径**：ERP 采购单用两位码 10/20/30/40 表示状态，SRM 用
+     `isNewSup: "Y"/"N"` 表示布尔 —— 状态表与 `_bool()` 解决。
+  3. **单位与量纲**：金额有的给「分」（refPrice / quotPrice / unitPrice /
+     totalAmt）有的给「元」，时间统一是 epoch **毫秒** —— 按**来源字段名**
+     判单位，不猜数值。
+  4. **同一概念两套字段**：参考单价（物料侧 refPrice）与报价单价（SRM 侧
+     quotPrice）是两种业务含义、两个字段名，不是同一个字段的两种写法 ——
+     所以别名表按「目标对象」分组，不搞全局大杂烩。
 
 上层节点只认标准字段，永远不需要知道这些差异。
 """
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -48,67 +57,92 @@ _TZ_CHINA = timezone(timedelta(hours=8))
 
 #: 标准字段 -> 上游可能出现的写法（按优先级排列，命中即止）
 FIELD_MAP: Dict[str, List[str]] = {
-    # ---- 订单主数据 ----
-    "order_id":      ["order_id", "orderId", "orderNo", "order_no", "orderSn", "tradeNo", "tid", "订单号"],
-    "customer_name": ["customer_name", "customerName", "buyerNick", "buyer_nick", "consignee", "客户姓名"],
-    "status_code":   ["status_code", "statusCode", "tradeStatus", "trade_status", "orderStatus", "订单状态"],
-    "pay_amount":    ["pay_amount", "payAmount", "payFee", "pay_fee", "payment", "actualAmount", "实付金额"],
-    "total_amount":  ["total_amount", "totalAmount", "goodsAmount", "totalFee", "total_fee", "订单金额"],
-    "shipping_fee":  ["shipping_fee", "shippingFee", "postFee", "post_fee", "freight", "运费"],
-    "warehouse":     ["warehouse", "warehouseName", "warehouse_name", "stockName", "发货仓"],
-    "created_at":    ["created_at", "createdAt", "gmtCreate", "createTime", "create_time", "orderTime", "下单时间"],
-    "items":         ["items", "itemList", "item_list", "orderItems", "details", "商品明细"],
-    "receiver":      ["receiver", "receiverInfo", "receiver_info", "address", "shippingAddress", "收货地址"],
-    # ---- 订单行 ----
-    "sku_id":        ["sku_id", "skuId", "skuCode", "sku_code", "itemCode", "outSkuId", "商品编码"],
-    "product_name":  ["product_name", "productName", "itemName", "item_name", "goodsName", "商品名称"],
-    "quantity":      ["quantity", "qty", "num", "count", "购买数量"],
-    "unit_price":    ["unit_price", "unitPrice", "salePrice", "price", "单价"],
-    # ---- 物流 ----
-    "tracking_no":   ["tracking_no", "trackingNo", "waybillNo", "waybill_no", "mailNo", "nu", "运单号"],
-    "carrier":       ["carrier", "expressCompany", "express_company", "company", "com", "承运商"],
-    "trace_status":  ["trace_status", "traceStatus", "state", "logisticsStatus", "物流状态"],
-    "nodes":         ["nodes", "data", "traces", "list", "轨迹"],
-    "node_time":     ["node_time", "ftime", "acceptTime", "time", "datetime", "节点时间"],
-    "node_desc":     ["node_desc", "context", "acceptStation", "desc", "remark", "节点描述"],
-    "node_status":   ["node_status", "status", "state", "节点状态"],
-    # ---- 库存 ----
-    "available":     ["available", "qtyAvailable", "qty_available", "usableNum", "stock", "可售数量"],
-    "reserved":      ["reserved", "qtyReserved", "qty_reserved", "lockNum", "占用数量"],
-    "restock_eta":   ["restock_eta", "restockEta", "预计补货"],
+    # ---- 物料（ERP 物料模块） ----
+    "material_code": ["material_code", "matCode", "materialNo", "itemCode", "物料编码"],
+    "material_name": ["material_name", "matName", "materialName", "itemName", "物料名称"],
+    "spec":         ["spec", "specModel", "specification", "规格型号"],
+    "category":     ["category", "matGroup", "materialGroup", "物料分类"],
+    "unit":         ["unit", "baseUnit", "uom", "unitName", "计量单位"],
+    "unit_price_ref": ["unit_price_ref", "refPrice", "standardPrice", "参考单价"],
+    "substitutes":  ["substitutes", "substituteCodes", "alternatives", "替代料"],
+    # ---- 供应商（SRM） ----
+    "supplier_code": ["supplier_code", "supCode", "supplierNo", "vendorCode", "供应商编码"],
+    "supplier_name": ["supplier_name", "supName", "supplierName", "vendorName", "供应商名称"],
+    "is_new":       ["is_new", "isNewSup", "isNew", "newSupplier", "新供应商"],
+    "lead_time_days": ["lead_time_days", "leadDays", "leadTime", "承诺交期"],
+    "on_time_rate": ["on_time_rate", "onTimeRate", "deliveryOnTimeRate", "准时率"],
+    "defect_rate":  ["defect_rate", "defectRate", "qualityDefectRate", "不良率"],
+    "cooperation_since": ["cooperation_since", "cooperationSince", "合作起始"],
+    "main_categories": ["main_categories", "mainCategories", "主营品类"],
+    # ---- 仓库（WMS 基础档案） ----
+    "warehouse_code": ["warehouse_code", "whCode", "warehouseNo", "仓库编码"],
+    "warehouse_name": ["warehouse_name", "whName", "warehouseName", "仓库名称"],
+    "city":         ["city", "所在城市"],
+    "address":      ["address", "addr", "addrDetail", "详细地址"],
+    # ---- 库存（WMS） ----
+    "on_hand":      ["on_hand", "onHandQty", "onHand", "stockQty", "在库数量"],
+    "reserved":     ["reserved", "frozenQty", "frozen", "lockedQty", "冻结数量"],
+    "safety_stock": ["safety_stock", "safetyQty", "safetyStock", "安全库存"],
+    "avg_daily_out": ["avg_daily_out", "avgOut30d", "avgDailyOut", "日均出库"],
+    # ---- 报价（SRM） ----
+    "min_order_qty": ["min_order_qty", "minOrderQty", "moq", "最小起订量"],
+    "valid_days":   ["valid_days", "validDays", "quoteValidDays", "报价有效天数"],
+    # ---- 采购订单（ERP 采购模块） ----
+    "po_no":        ["po_no", "poNo", "purchaseOrderNo", "采购订单号"],
+    "request_id":   ["request_id", "prNo", "requestNo", "申请单号"],
+    "qty":          ["qty", "quantity", "orderQty", "数量"],
+    "unit_price":   ["unit_price", "unitPrice", "quotPrice", "quotePrice", "price", "单价"],
+    "amount":       ["amount", "totalAmt", "totalAmount", "金额"],
+    "target_warehouse": ["target_warehouse", "destWh", "destWarehouse", "到货仓库"],
+    "status":       ["status", "orderStatus", "statusCode", "status_code", "单据状态"],
+    "operator_id":  ["operator_id", "operatorId", "operator", "经办人"],
+    "created_at":   ["created_at", "gmtCreate", "createTime", "创建时间"],
+    # ---- 收货（WMS） ----
+    "receipt_no":   ["receipt_no", "rcvNo", "receiptNo", "收货单号"],
+    "qty_expected": ["qty_expected", "qtyPlan", "expectedQty", "应收数量"],
+    "qty_received": ["qty_received", "qtyActual", "receivedQty", "实收数量"],
+    "qty_defect":   ["qty_defect", "qtyBad", "defectQty", "不良数量"],
+    "defect_type":  ["defect_type", "badType", "defectType", "不良类型"],
+    "disposition":  ["disposition", "disposal", "处置方式"],
+    "inspector":    ["inspector", "checker", "质检员"],
+    "report_url":   ["report_url", "reportUrl", "报告地址"],
 }
 
 
-# ==================== 二、枚举口径：状态码 / 状态文案 ====================
+# ==================== 二、枚举口径：状态码 / 状态文案 / 布尔 ====================
 
 #: 内部统一状态码 -> 文案。全系统只认这一份。
 STATUS_TEXT: Dict[str, str] = {
-    "100": "待付款",
-    "200": "已付款待发货",
-    "300": "已发货",
-    "400": "已签收",
-    "500": "已取消",
-    "600": "退款中",
-    "700": "已退款",
+    "created": "待发货",
+    "in_transit": "在途",
+    "received": "已入库",
+    "cancelled": "已取消",
 }
 
 #: 上游状态码 -> 内部状态码。
-#: 订单中台（用友/金蝶这类 ERP 的常见约定）用 10/20/30/40/50，
-#: 内部用百位口径。两边都要能进（幂等：已经归一过的不再二次映射，
-#: 否则 400 会被当成「上游的 400」再映射一次 —— 虽然结果相同，
-#: 但多一条假的归一轨迹会让人误以为上游真的返回了 400）。
+#: ERP 采购模块用两位码（10/20/30/40），内部用英文机器码。两边都要能进
+#: （幂等：已经归一过的不再二次映射 —— 虽然结果相同，但多一条假的归一
+#: 轨迹会让人误以为上游真的返回了英文码）。
 STATUS_CODE_MAP: Dict[str, str] = {
-    "10": "100", "20": "200", "30": "300", "40": "400", "50": "500",
-    "60": "600", "70": "700",
-    "100": "100", "200": "200", "300": "300", "400": "400",
-    "500": "500", "600": "600", "700": "700",
+    "10": "created", "20": "in_transit", "30": "received", "40": "cancelled",
+    "created": "created", "in_transit": "in_transit",
+    "received": "received", "cancelled": "cancelled",
 }
 
 #: 状态文案 -> 内部状态码（有些上游只给中文，没有码）
 STATUS_TEXT_MAP: Dict[str, str] = {v: k for k, v in STATUS_TEXT.items()}
 
-#: 快递接口的状态词表（与订单状态不是一套，单独维护）
-TRACE_STATUS_HINTS = ["已揽收", "运输中", "派送中", "已签收", "异常", "退回", "待揽收"]
+#: 布尔词的字符串写法（SRM 的 isNewSup 给的是 "Y"/"N"）
+_TRUE_WORDS = {"y", "yes", "true", "1", "是"}
+
+
+def _bool(value: Any) -> bool:
+    """上游的布尔：真布尔 / "Y"/"N" / 1/0 / "是"。认不出来一律按 False。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in _TRUE_WORDS
 
 
 # ==================== 三、单位与量纲 ====================
@@ -116,18 +150,19 @@ TRACE_STATUS_HINTS = ["已揽收", "运输中", "派送中", "已签收", "异�
 #: 以「分」为单位的上游字段。
 #:
 #: 单位属于**来源字段**，不属于数值本身 —— 所以按字段名判定，不去猜数值大小。
-#: 「199 元的整数」和「199 分」在数值上完全无法区分，靠大小猜迟早把
-#: 199 元读成 1.99 元，或者把 19900 分读成 19900 元。
+#: 「5.6 元」和「5.6 分」在数值上完全无法区分，靠大小猜迟早把 560 分读成
+#: 560 元，或者把 6 元读成 0.06 元。名单只登记**已知以分报价**的字段；
+#: 不在名单里的一律按元读 —— 宁可读成「偏大的元」，也不静默缩小 100 倍。
 CENT_FIELDS = {
-    "payFee", "pay_fee", "totalFee", "total_fee", "postFee", "post_fee",
-    "freight", "actualAmount", "price", "salePrice", "unitPrice",
+    "refPrice", "quotPrice", "quotePrice", "unitPrice", "standardPrice",
+    "totalAmt", "price",
 }
 
 
 class MapTrace:
     """归一轨迹：记录「哪个上游字段被映射成了哪个标准字段」。
 
-    存在的意义是可解释性。demo 里直接打印出来，能指着说清这三家的差异具体
+    存在的意义是可解释性。demo 里直接打印出来，能指着说清这四家的差异具体
     在哪几处；线上排查「字段读空了」时也不用回去翻上游文档。
     """
 
@@ -257,62 +292,12 @@ def format_time(value: Any, *, source_field: str = "", trace: Optional[MapTrace]
     return moment.astimezone(_TZ_CHINA).strftime("%Y-%m-%d %H:%M:%S")
 
 
-# ==================== 地址 ====================
-
-_PHONE = re.compile(r"\b(1[3-9]\d)\d{4}(\d{4})\b")
-_ADDRESS_PARTS = ("province", "city", "district", "detail")
-
-
-def mask_phone(text: str) -> str:
-    """手机号脱敏：138****6721。
-
-    收货信息会进日志、进状态、进前端页面，明文手机号属于不该到处跑的数据。
-    种子里本来就是脱敏的，这里兜住上游给明文的情况。
-    """
-    return _PHONE.sub(r"\1****\2", text or "")
-
-
-def flatten_address(value: Any, *, source_field: str = "",
-                    trace: Optional[MapTrace] = None) -> str:
-    """收货信息归一：嵌套 dict -> 一行文本，并顺手脱敏手机号。
-
-    上游有两种形态：结构化地址对象（省/市/区/详址分开）和拼好的一整串。
-    客服侧只需要一行能读的字符串，所以这里做**单向**扁平化：
-    结构化对象拍平成「姓名 电话，省市区+详址」，已经是字符串的原样保留。
-
-    归一轨迹也在这里写：改名与改结构是同一处差异，分两条记会让人以为有区别。
-    """
-    if not value:
-        return ""
-
-    if isinstance(value, str):
-        if trace is not None and source_field and source_field != "receiver":
-            trace.add(f"{source_field} → receiver")
-        return mask_phone(value.strip())
-
-    if isinstance(value, dict):
-        parts = [str(value.get(k) or "").strip() for k in _ADDRESS_PARTS]
-        address = "".join(p for p in parts if p)
-        name = str(value.get("name") or "").strip()
-        phone = mask_phone(str(value.get("phone") or "").strip())
-
-        pieces = [p for p in (name, phone) if p]
-        if trace is not None and address:
-            trace.add(f"{source_field or 'receiver'}(嵌套地址) → receiver(扁平字符串)")
-
-        if pieces:
-            return f"{' '.join(pieces)}，{address}" if address else " ".join(pieces)
-        return address
-
-    return str(value)
-
-
 # ==================== 状态 ====================
 
 def normalize_status(value: Any, *, trace: Optional[MapTrace] = None) -> Tuple[str, str]:
     """状态归一，返回 (内部状态码, 文案)。
 
-    三种输入都要认：上游数字码（40）、内部数字码（400）、中文文案（已签收）。
+    三种输入都要认：上游两位码（30）、内部机器码（received）、中文文案（已入库）。
     认不出来时返回 `("", 原文)` —— 保留原文比硬猜一个码有用，
     上层可以照原样展示，而不是显示一个错的「已取消」。
     """
@@ -321,6 +306,8 @@ def normalize_status(value: Any, *, trace: Optional[MapTrace] = None) -> Tuple[s
 
     if isinstance(value, str) and not value.strip().isdigit():
         text = value.strip()
+        if text in STATUS_TEXT:  # 已经是内部机器码（幂等：不再二次映射）
+            return text, STATUS_TEXT[text]
         code = STATUS_TEXT_MAP.get(text, "")
         return code, text
 
@@ -330,87 +317,119 @@ def normalize_status(value: Any, *, trace: Optional[MapTrace] = None) -> Tuple[s
         return "", raw
 
     if trace is not None and code != raw:
-        trace.add(f"status={raw} → {code}({STATUS_TEXT.get(code, '')})")
+        trace.add(f"状态码 {raw} → {code}（{STATUS_TEXT.get(code, '')}）")
     return code, STATUS_TEXT.get(code, "")
 
 
 # ==================== 各业务对象的归一 ====================
 
-def normalize_order(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
-    """订单主数据归一。"""
-    trace = trace if trace is not None else MapTrace("订单中台")
-
-    order_id = pick(raw, "order_id", trace=trace) or ""
-    status_code, status_text = normalize_status(pick(raw, "status_code"), trace=trace)
-
+def normalize_material(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
+    """物料主数据归一（ERP 物料模块 -> `MaterialInfo` 字段口径）。"""
+    trace = trace if trace is not None else MapTrace("ERP 物料")
     return {
-        "order_id": str(order_id),
-        "customer_name": str(pick(raw, "customer_name", trace=trace) or ""),
-        "status_code": status_code,
-        "status_text": status_text,
-        "pay_amount": _money(raw, "pay_amount", trace),
-        "total_amount": _money(raw, "total_amount", trace),
-        "shipping_fee": _money(raw, "shipping_fee", trace),
-        "warehouse": str(pick(raw, "warehouse", trace=trace) or ""),
-        "created_at": _time(raw, "created_at", trace),
-        "receiver": flatten_address(pick(raw, "receiver"),
-                                    source_field=_matched_alias(raw, "receiver"), trace=trace),
-        "items": [
-            normalize_order_item(item, trace=trace)
-            for item in (pick(raw, "items", trace=trace) or [])
-            if isinstance(item, dict)
-        ],
+        "material_code": str(pick(raw, "material_code", trace=trace) or ""),
+        "material_name": str(pick(raw, "material_name", trace=trace) or ""),
+        "spec": str(pick(raw, "spec", trace=trace) or ""),
+        "category": str(pick(raw, "category", trace=trace) or ""),
+        "unit": str(pick(raw, "unit", trace=trace) or ""),
+        "unit_price_ref": _money(raw, "unit_price_ref", trace, label="参考单价"),
+        "substitutes": _str_list(raw, "substitutes", trace),
     }
 
 
-def normalize_order_item(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
-    """订单行归一。"""
-    price_field = _matched_alias(raw, "unit_price")
+def normalize_supplier(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
+    """供应商归一（SRM -> `SupplierInfo` 字段口径）。"""
+    trace = trace if trace is not None else MapTrace("SRM 供应商")
     return {
-        "sku_id": str(pick(raw, "sku_id", trace=trace) or ""),
-        "product_name": str(pick(raw, "product_name", trace=trace) or ""),
-        "quantity": int(pick(raw, "quantity", trace=trace) or 0),
-        "unit_price": to_yuan(
-            pick(raw, "unit_price"), source_field=price_field,
-            trace=trace, canonical="行单价",
-        ),
+        "supplier_code": str(pick(raw, "supplier_code", trace=trace) or ""),
+        "supplier_name": str(pick(raw, "supplier_name", trace=trace) or ""),
+        "is_new": _bool(pick(raw, "is_new", trace=trace)),
+        "lead_time_days": _int(raw, "lead_time_days", trace),
+        "on_time_rate": _float(raw, "on_time_rate", trace),
+        "defect_rate": _float(raw, "defect_rate", trace),
+        "cooperation_since": str(pick(raw, "cooperation_since", trace=trace) or ""),
+        "main_categories": _str_list(raw, "main_categories", trace),
     }
 
 
-def normalize_logistics(raw: Dict[str, Any], *, order_id: str = "",
-                        trace: Optional[MapTrace] = None) -> Dict[str, Any]:
-    """物流轨迹归一。节点按时间**正序**排好，下游不用各自再排一遍。"""
-    trace = trace if trace is not None else MapTrace("快递查询")
-
-    nodes = []
-    for node in (pick(raw, "nodes", trace=trace) or []):
-        if not isinstance(node, dict):
-            continue
-        nodes.append({
-            "time": _time(node, "node_time", trace, canonical_name="轨迹节点时间"),
-            "status": str(pick(node, "node_status", trace=trace) or ""),
-            "desc": str(pick(node, "node_desc", trace=trace) or ""),
-        })
-    nodes.sort(key=lambda n: n["time"] or "")
-
+def normalize_warehouse(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
+    """仓库归一（WMS 基础档案 -> `WarehouseInfo` 字段口径）。"""
+    trace = trace if trace is not None else MapTrace("WMS 仓库")
     return {
-        "order_id": order_id or str(pick(raw, "order_id", trace=trace) or ""),
-        "carrier": str(pick(raw, "carrier", trace=trace) or ""),
-        "tracking_no": str(pick(raw, "tracking_no", trace=trace) or ""),
-        "status": str(pick(raw, "trace_status", trace=trace) or ""),
-        "nodes": nodes,
+        "warehouse_code": str(pick(raw, "warehouse_code", trace=trace) or ""),
+        "warehouse_name": str(pick(raw, "warehouse_name", trace=trace) or ""),
+        "city": str(pick(raw, "city", trace=trace) or ""),
+        "address": str(pick(raw, "address", trace=trace) or ""),
     }
 
 
 def normalize_stock(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
-    """库存归一。"""
-    trace = trace if trace is not None else MapTrace("仓储 WMS")
+    """库存归一（WMS -> `StockItem` 字段口径）。
+
+    上游给的是四个**原始量**；「可用量」（在库 − 冻结）不在这里算 ——
+    那是 `StockItem.qty_available` 的业务口径，只有一处定义。
+    """
+    trace = trace if trace is not None else MapTrace("WMS 库存")
     return {
-        "sku_id": str(pick(raw, "sku_id", trace=trace) or ""),
-        "warehouse": str(pick(raw, "warehouse", trace=trace) or ""),
-        "available": int(pick(raw, "available", trace=trace) or 0),
-        "reserved": int(pick(raw, "reserved", trace=trace) or 0),
-        "restock_eta": str(pick(raw, "restock_eta", trace=trace) or ""),
+        "material_code": str(pick(raw, "material_code", trace=trace) or ""),
+        "warehouse_code": str(pick(raw, "warehouse_code", trace=trace) or ""),
+        "on_hand": _int(raw, "on_hand", trace),
+        "reserved": _int(raw, "reserved", trace),
+        "safety_stock": _int(raw, "safety_stock", trace),
+        "avg_daily_out": _float(raw, "avg_daily_out", trace),
+    }
+
+
+def normalize_quote(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
+    """报价归一（SRM -> `SupplierQuote` 字段口径）。"""
+    trace = trace if trace is not None else MapTrace("SRM 报价")
+    return {
+        "material_code": str(pick(raw, "material_code", trace=trace) or ""),
+        "supplier_code": str(pick(raw, "supplier_code", trace=trace) or ""),
+        "unit_price": _money(raw, "unit_price", trace, label="报价单价"),
+        "min_order_qty": _int(raw, "min_order_qty", trace),
+        "valid_days": _int(raw, "valid_days", trace),
+    }
+
+
+def normalize_purchase_order(raw: Dict[str, Any], *,
+                             trace: Optional[MapTrace] = None) -> Dict[str, Any]:
+    """采购订单归一（ERP 采购模块 -> `PurchaseOrderInfo` 字段口径）。"""
+    trace = trace if trace is not None else MapTrace("ERP 采购")
+    status_code, status_text = normalize_status(pick(raw, "status", trace=trace), trace=trace)
+    return {
+        "po_no": str(pick(raw, "po_no", trace=trace) or ""),
+        "request_id": str(pick(raw, "request_id", trace=trace) or ""),
+        "material_code": str(pick(raw, "material_code", trace=trace) or ""),
+        "qty": _float(raw, "qty", trace),
+        "unit": str(pick(raw, "unit", trace=trace) or ""),
+        "unit_price": _money(raw, "unit_price", trace, label="采购单价"),
+        "amount": _money(raw, "amount", trace, label="订单金额"),
+        "supplier_code": str(pick(raw, "supplier_code", trace=trace) or ""),
+        "target_warehouse": str(pick(raw, "target_warehouse", trace=trace) or ""),
+        "status": status_code,
+        "status_text": status_text,
+        "operator_id": str(pick(raw, "operator_id", trace=trace) or ""),
+    }
+
+
+def normalize_receipt(raw: Dict[str, Any], *, trace: Optional[MapTrace] = None) -> Dict[str, Any]:
+    """收货单归一（WMS -> 内部字段口径；`reportUrl` 缺席时留空串）。"""
+    trace = trace if trace is not None else MapTrace("WMS 收货")
+    return {
+        "receipt_no": str(pick(raw, "receipt_no", trace=trace) or ""),
+        "po_no": str(pick(raw, "po_no", trace=trace) or ""),
+        "material_code": str(pick(raw, "material_code", trace=trace) or ""),
+        "qty_expected": _int(raw, "qty_expected", trace),
+        "qty_received": _int(raw, "qty_received", trace),
+        "qty_defect": _int(raw, "qty_defect", trace),
+        "defect_type": str(pick(raw, "defect_type", trace=trace) or ""),
+        "disposition": str(pick(raw, "disposition", trace=trace) or ""),
+        "warehouse_code": str(pick(raw, "warehouse_code", trace=trace) or ""),
+        "supplier_code": str(pick(raw, "supplier_code", trace=trace) or ""),
+        "inspector": str(pick(raw, "inspector", trace=trace) or ""),
+        "created_at": _time(raw, "created_at", trace, label="登记时间"),
+        "report_url": str(pick(raw, "report_url", trace=trace) or ""),
     }
 
 
@@ -424,12 +443,41 @@ def _matched_alias(raw: Dict[str, Any], canonical: str) -> str:
     return ""
 
 
-def _money(raw: Dict[str, Any], canonical: str, trace: MapTrace) -> float:
-    # 轨迹交给 to_yuan 一并写出，这里取值时不再记一条 —— 否则同一处差异会出现两行
+def _money(raw: Dict[str, Any], canonical: str, trace: MapTrace, label: str = "") -> float:
+    # 轨迹交给 to_yuan 一并写出（改名 + 换单位是一条），这里取值时不再记
     return to_yuan(pick(raw, canonical), source_field=_matched_alias(raw, canonical),
-                   trace=trace, canonical=canonical)
+                   trace=trace, canonical=label or canonical)
 
 
-def _time(raw: Dict[str, Any], canonical: str, trace: MapTrace, canonical_name: str = "") -> str:
+def _time(raw: Dict[str, Any], canonical: str, trace: MapTrace, label: str = "") -> str:
     return format_time(pick(raw, canonical), source_field=_matched_alias(raw, canonical),
-                       trace=trace, canonical=canonical_name or canonical)
+                       trace=trace, canonical=label or canonical)
+
+
+def _number(raw: Dict[str, Any], canonical: str, trace: MapTrace, cast):
+    value = pick(raw, canonical, trace=trace)
+    if value in (None, ""):
+        return cast(0)
+    try:
+        return cast(float(value))
+    except (TypeError, ValueError):
+        logger.warning(f"数值字段无法解析：{canonical}={value!r}")
+        return cast(0)
+
+
+def _int(raw: Dict[str, Any], canonical: str, trace: MapTrace) -> int:
+    return _number(raw, canonical, trace, int)
+
+
+def _float(raw: Dict[str, Any], canonical: str, trace: MapTrace) -> float:
+    return _number(raw, canonical, trace, float)
+
+
+def _str_list(raw: Dict[str, Any], canonical: str, trace: MapTrace) -> List[str]:
+    """列表字段归一：真列表原样，逗号串拍开（上游偶尔把列表压成一行）。"""
+    value = pick(raw, canonical, trace=trace)
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if v not in (None, "")]
+    if isinstance(value, str) and value.strip():
+        return [p.strip() for p in value.replace("，", ",").split(",") if p.strip()]
+    return []

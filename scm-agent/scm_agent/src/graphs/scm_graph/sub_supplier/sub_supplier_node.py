@@ -20,8 +20,9 @@ TODO(Phase 6)：接入图谱通路的供应商评分（同一公式的第二种�
 ----------
 这里是「子图只读状态」这条约定**唯一**的例外：报价是「按物料拉取」的明细
 （38 条覆盖 20 多个物料），全量装进状态没有意义，主图也不为它单开一路装载。
-Phase 4 会给它接端口（`get_supplier_port().list_supplier_quotes`，也是 MCP
-工具之一），当前的直读与此保持同一个签名形状，换的时候只动 `_quotes` 一处。
+所以它走端口 `get_supplier_port().list_supplier_quotes`（也是 MCP 工具之一）：
+`TOOL_GATEWAY=mcp` 时这条报价链路同样穿过网关。归一是显式一步，
+`_rank` 只认内部口径（unit_price 元），不认上游的 quotPrice 分。
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ from graphs.scm_graph.sub_supplier.sub_supplier_state import (
     SubSupplierState,
     SubSupplierStateField,
 )
+from integrations.factory import get_supplier_port
+from integrations.normalize import normalize_quote
 from models.scm_models import (
     MaterialInfo,
     NodeResult,
@@ -70,14 +73,16 @@ def _query_text(state: SubSupplierState) -> str:
 
 
 def _quotes(material_code: str) -> List[Dict]:
-    """按物料取各家报价。
+    """按物料取各家报价（经端口 + 归一到内部口径）。
 
-    TODO(Phase 4)：换成 `get_supplier_port().list_supplier_quotes(material_code)`。
-    端口尚未建立，先直读 store —— 这是子图里唯一一处查库，原因见模块文档。
+    归一是显式的一步：上游（SRM 报文 quotPrice 分）在这里变成内部口径
+    （unit_price 元），与 store 时代 `list_quotes_by_material` 的字段形状
+    完全一致 —— 所以 `_rank` 一行没动。
     """
-    from tools.store_tool import store_client
-
-    return store_client.list_quotes_by_material(material_code)
+    return [
+        normalize_quote(q)
+        for q in get_supplier_port().list_supplier_quotes(material_code)
+    ]
 
 
 def welcome_node(state: SubSupplierState, config: RunnableConfig):

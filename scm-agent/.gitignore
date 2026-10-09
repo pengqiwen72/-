@@ -26,10 +26,12 @@ env/
 # uv.lock
 
 # ---- 运行时产物 ----
+# 数据目录在各工程子目录下（如 scm_agent/data/），含斜杠的模式会按仓库根锚定，
+# 所以这里用 ** 前缀匹配任意层级。
 *.log
 logs/
-data/index/
-data/runtime/
+**/data/index/
+**/data/runtime/
 .langgraph_api/
 *.sqlite
 *.db

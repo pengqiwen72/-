@@ -53,6 +53,17 @@ SCENARIOS: dict[str, dict] = {
         "env": {"MOCK_FAIL_ACTIONS": "graph"},
         "repeat": 4,
     },
+    # ---- 韧性（装载链路故障熔断）----
+    "load_degraded": {
+        "title": "装载链路故障熔断（物料一路挂）",
+        "input": "M100023 各个仓库还有多少库存？",
+        "desc": "给物料主数据这一路注入故障并连跑 4 次：前三次该域装载失败"
+                "（记 code=1，其余数据域与链路整体照常），第四次熔断器打开、"
+                "快速失败 —— 「部分失败不整体失败」与「坏依赖不再等超时」"
+                "在装载链路上同样成立。",
+        "env": {"MOCK_FAIL_ACTIONS": "material"},
+        "repeat": 4,
+    },
     # ---- 库存管理 ----
     "inventory_query": {
         "title": "库存查询（多仓分布）",
@@ -130,7 +141,7 @@ SCENARIOS: dict[str, dict] = {
 #: 「闲聊」放最前面是因为它最不依赖种子数据，链路最短，先跑通能立刻确认环境没问题。
 DEFAULT_ORDER = [
     "talk",
-    "material_qa", "material_qa_relation", "qa_miss", "qa_degraded",
+    "material_qa", "material_qa_relation", "qa_miss", "qa_degraded", "load_degraded",
     "inventory_query", "inventory_low",
     "supplier_compare", "supplier_score",
     "purchase_auto", "purchase_approval", "purchase_reject", "purchase_replay",

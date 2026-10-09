@@ -64,10 +64,18 @@ def pytest_configure(config):
 
     它来自 `scm_graph.py` 等源码里的构造调用（V2 才会移除），每个用例刷一屏，
     会把真正的失败信息淹掉。只滤这一条，别的警告照常报出来。
+
+    顺带注册 `slow` 标记（如连接池复用用例要起本地 HTTP 端点、真实 sleep）；
+    不注册的话 pytest 会刷 PytestUnknownMarkWarning，并在 `--strict-markers`
+    下直接报错。默认全跑，`-m "not slow"` 可跳过。
     """
     config.addinivalue_line(
         "filterwarnings",
         r"ignore:.*config_schema.*:DeprecationWarning",
+    )
+    config.addinivalue_line(
+        "markers",
+        "slow: 带真实计时/本地 socket 的用例，-m 'not slow' 可跳过",
     )
 
 
