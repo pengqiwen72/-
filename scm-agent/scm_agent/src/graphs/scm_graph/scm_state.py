@@ -21,6 +21,7 @@
 
 import operator
 from typing_extensions import Annotated, List, TypedDict
+from typing import Union
 from enum import Enum
 from models.scm_models import (
     InventoryReport,
@@ -33,6 +34,7 @@ from models.scm_models import (
     ReceiptPlan,
     StockItem,
     SupplierComparison,
+    SupplierEvaluation,
     SupplierInfo,
     TaskResult,
     WarehouseInfo,
@@ -81,7 +83,8 @@ class IntermediateOutputState(TypedDict):
     purchase_request:   PurchasePlan
     goods_receipt:      ReceiptPlan
     inventory_query:    InventoryReport
-    supplier_query:     SupplierComparison
+    #: 比价排名（定位到物料）或履约评估（定位到供应商），两种报告共用此字段
+    supplier_query:     Union[SupplierComparison, SupplierEvaluation]
 
 class ScmState(InputState,IntermediateInputState,IntermediateOutputState,OutputState):
     '''

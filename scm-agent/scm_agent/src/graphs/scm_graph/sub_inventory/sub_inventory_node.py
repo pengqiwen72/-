@@ -14,12 +14,19 @@
   * 低于安全线 = 可用量 < 安全库存线（逐仓判定，全仓一处低于就算）
   * 可支撑天数 = 全仓在库 / 全仓近 30 天日均出库
 
-Phase 2 的简化之处（TODO 标注，Phase 6 补齐）
-----------------------------------------------
-* 调拨建议（从余量仓调往缺口仓）留空 —— 它需要跨仓配平与最小调拨量规则，
-  Phase 6 接入；这里先把「有多少、缺不缺」讲清楚。
-* 多仓分布暂用状态里的库存快照直接算；Phase 3 图谱通路上线后，同一条数据
-  会有第二种来源（图投影），两条路径要给出**同一个答案**（测试会比对）。
+调拨建议（规则与图谱通道同源）
+------------------------------
+本链路用状态里的库存快照算，`kg/query.py::stock_distribution` 用图投影算 ——
+同一批种子数据的两种来源，**必须给出同一个答案**（测试逐项比对）。所以规则
+只写一遍在这里、照抄一遍在那里，改其一必改其二：
+
+  * 缺口仓 = 低于安全线的仓里**缺口最大**的（缺口 = 安全线 − 可用量）；
+  * 余量仓 = 不低于安全线的仓里**余量最大**的（余量 = 可用量 − 安全线）；
+  * 调拨量 = min(缺口, 余量)：以补齐缺口为准，且调出仓调出后仍不得低于
+    自己的安全线。
+
+两者缺一就不提建议：全仓都缺（没有余量仓）说明要靠补货而不是调拨；没有
+缺口仓时更不该多事。
 """
 
 from __future__ import annotations
@@ -35,7 +42,13 @@ from graphs.scm_graph.sub_inventory.sub_inventory_state import (
     SubInventoryState,
     SubInventoryStateField,
 )
-from models.scm_models import InventoryReport, NodeResult, StockItem, TaskResult
+from models.scm_models import (
+    InventoryReport,
+    NodeResult,
+    StockItem,
+    TaskResult,
+    TransferSuggestion,
+)
 from observability.progress import emit, node_done
 from utils.agent_logger import get_logger
 
@@ -98,11 +111,19 @@ def query_node(state: SubInventoryState, config: RunnableConfig):
 
     report = _aggregate(material, rows)
 
+    transfer_note = ""
+    if report.transfers:
+        t = report.transfers[0]
+        transfer_note = (
+            f"；建议从 {t.from_warehouse} 调拨 {t.qty}{report.unit} 到 {t.to_warehouse}"
+        )
+
     emit(
         "stock_aggregate",
         detail=(
             f"{len(rows)} 个仓库，可用合计 {report.total_available}{report.unit}"
             + ("（存在低于安全线的仓）" if report.below_safety else "")
+            + transfer_note
         ),
     )
     node_done(NodeName.QUERY.value,
@@ -136,12 +157,21 @@ def _aggregate(material, rows: List[StockItem]) -> InventoryReport:
     turnover = round(total_on_hand / out_per_day, 1) if out_per_day > 0 else 0.0
 
     below = [s for s in rows if s.below_safety]
+    transfers = _suggest_transfer(rows, material.unit)
 
     if below:
         names = "、".join(s.warehouse_code for s in below)
+        if transfers:
+            t = transfers[0]
+            advice = (
+                f"，建议从 {t.from_warehouse} 调拨 {t.qty}{material.unit}"
+                f"至 {t.to_warehouse}"
+            )
+        else:
+            advice = "，全仓没有余量可调，建议尽快补货"
         summary = (
             f"全仓可用 {total_available}{material.unit}，"
-            f"{names} 低于安全库存线，建议尽快补货或调拨。"
+            f"{names} 低于安全库存线{advice}。"
         )
     else:
         summary = f"全仓可用 {total_available}{material.unit}，各仓均在安全线以上。"
@@ -159,10 +189,44 @@ def _aggregate(material, rows: List[StockItem]) -> InventoryReport:
         below_safety=bool(below),
         turnover_days=turnover,
         rows=rows,
-        # TODO(Phase 6)：跨仓调拨建议（余量仓 → 缺口仓，带最小调拨量约束）
-        transfers=[],
+        transfers=transfers,
         summary=summary,
     )
+
+
+def _suggest_transfer(rows: List[StockItem], unit: str) -> List[TransferSuggestion]:
+    """跨仓调拨建议：余量仓 → 缺口仓。
+
+    规则见模块文档。挑两个「最」而不是贪心配平多对：演示场景里缺口的戏码
+    集中在某一个仓，挑最急的缺口、找余量最大的仓，一条建议讲清楚就够；
+    多对配对是补货计划的事，不属于查询链路。
+    """
+    short_rows = [s for s in rows if s.below_safety]
+    rich_rows = [s for s in rows if not s.below_safety]
+    if not short_rows or not rich_rows:
+        return []
+
+    short = max(short_rows, key=lambda s: s.safety_stock - s.qty_available)
+    rich = max(rich_rows, key=lambda s: s.qty_available - s.safety_stock)
+    gap = short.safety_stock - short.qty_available
+    surplus = rich.qty_available - rich.safety_stock
+    qty = min(gap, surplus)
+    if qty <= 0:  # pragma: no cover - 两个分支的构造保证 qty > 0
+        return []
+
+    return [TransferSuggestion(
+        material_code=short.material_code,
+        from_warehouse=rich.warehouse_code,
+        to_warehouse=short.warehouse_code,
+        qty=qty,
+        reason=(
+            f"{short.warehouse_code} 低于安全线"
+            f"（可用 {short.qty_available}{unit} < 安全线 {short.safety_stock}{unit}），"
+            + ("按缺口量调拨" if qty == gap else "先按余量上限调拨")
+            + f"；调出后 {rich.warehouse_code} 可用 {rich.qty_available - qty}{unit}，"
+            f"仍不低于其安全线 {rich.safety_stock}{unit}"
+        ),
+    )]
 
 
 def _failure(reply: str, detail: str) -> Dict:

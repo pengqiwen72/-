@@ -122,9 +122,9 @@ class LexicalReranker:
     def _title_hit(query_terms: Sequence[str], title: str) -> float:
         """查询实词里有几成出现在文档标题中。
 
-        商品页的标题就是商品名，客户提到商品时用词通常与商品名重合
-        （「保温杯」命中「轻量智能保温杯 PRO 500ml」），这个比例因此可以
-        当作「客户问的是这个商品」的判断依据。
+        对象文档的标题就是对象名，用户提到对象时用词通常与名称重合
+        （「冷轧钢板 1.2mm」命中「冷轧钢板 1.2mm（M100023）规格卡」），
+        这个比例因此可以当作「问的是不是这个对象」的判断依据。
         """
         if not query_terms or not title:
             return 0.0

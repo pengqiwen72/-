@@ -52,10 +52,10 @@ DEFAULT_RECALL_K = 12
 #: 重排后保留多少条用于生成答案
 DEFAULT_TOP_K = 3
 
-#: 「查询点名了某个商品」的判定线：查询实词与商品名（文档标题）的重合度。
-#: 取 0.10 的依据是中文 n-gram 的粒度——查询提到商品名时通常能重合两个
-#: 以上的二字组（「保温杯」→「保温」「温杯」），在十余个查询词里就是 0.13 上下；
-#: 只是碰巧共享一两个字的查询落在 0.05 以下，不会误触发。
+#: 「查询点名了某个对象」的判定线：查询实词与对象文档标题的重合度。
+#: 取 0.10 的依据是中文 n-gram 的粒度——查询提到对象名时通常能重合两个
+#: 以上的二字组，在十余个查询词里就是 0.13 上下；只是碰巧共享一两个字的
+#: 查询落在 0.05 以下，不会误触发。
 TITLE_SCOPE_MIN = 0.10
 
 # 语料指纹 -> 已构建的知识库（进程内缓存）
@@ -98,22 +98,69 @@ class ProductKnowledgeBase:
             return []
         ranked = self.reranker.rerank(expanded, candidates)
         ranked = self._scope_products(ranked)
+        ranked = self._keep_relation_evidence(ranked, channel, top_k)
         return ranked[:top_k]
+
+    # ---------- 关系类问题的引用配额 ----------
+
+    def _keep_relation_evidence(self, ranked: List[ScoredChunk],
+                                channel: router_mod.Channel,
+                                top_k: int) -> List[ScoredChunk]:
+        """通道含图谱时，引用清单里至少留一条图事实。
+
+        为什么需要一条**配额**规则
+        --------------------------
+        两类候选的分数来源不同，量纲也不同（见 `rerank.py`）：
+
+          * 图事实：路径完整度（三跳链 raw 6.0 -> 0.67），有上限；
+          * 制度文档：词面匹配强度，换域之后「替代料」「安全库存」「调拨」
+            这些词在制度语料里本来就密集，相关条款拿到 0.8+ 很正常。
+
+        于是会出现一个看着合理、实则荒谬的结果：问「M100023 断料了，有没有
+        可以替代的物料？有货吗？」，引用清单被制度条款占满 —— 讲清了「怎么找
+        替代料」，却没有一句「替代的是哪个料、哪个仓有货」。分数高低在这里
+        不能直接比，它们衡量的不是同一种东西。
+
+        所以通道已经承认「这个问题需要图事实」时（RELATION / BOTH），给图事实
+        留一个引用位：把它放进第 `top_k` 位、替掉当前末位（相关度最低的那条）。
+        **只调整引用清单的构成，不碰任何分数** —— 置信度仍由重排绝对分决定，
+        分数该怎么算还怎么算（这一条是刻意的：一旦为了让图事实排上来去改分，
+        置信度阈值就整体位移了，那才是真会出事的地方）。
+        """
+        if channel is None or channel is router_mod.Channel.DOC or top_k <= 0:
+            return ranked
+
+        head, rest = ranked[:top_k], ranked[top_k:]
+        if any(c.preset_raw is not None for c in head):
+            return ranked  # 图事实已经凭自己的分进来了，不需要配额
+
+        fact = next((c for c in rest if c.preset_raw is not None), None)
+        if fact is None or not head:
+            return ranked
+
+        logger.info(
+            f"关系通道引用配额：图事实「{fact.chunk.section}」（{fact.rerank:.3f}）"
+            f"顶替末位文档「{head[-1].chunk.section}」（{head[-1].rerank:.3f}）"
+        )
+        return head[:-1] + [fact] + rest
 
     # ---------- 商品维度收敛 ----------
 
     def _scope_products(self, ranked: List[ScoredChunk]) -> List[ScoredChunk]:
-        """查询点名了某个商品时，排除**其他商品**的片段。
+        """查询点名了某个对象（`kind="product"` 的文档）时，排除**其他对象**的片段。
 
-        多商品知识库里最容易出的事故：客户问「这款保温杯能刻字定制吗」，
-        磨豆机的「刻字定制 3 个工作日内发出」因为字面命中太强被召回，答案里
-        于是同时出现「不支持刻字定制」和「刻字定制 3 个工作日内发出」——
-        两句互相矛盾，而且后一句根本不属于客户问的商品。单看任何一句都像是
-        有依据的，这正是这类错误难以自查的原因。
+        这类错误最典型的样子：问「M400301 怎么验收」，另一个物料的规格页里
+        「抽检比例 10%」因为字面命中太强被召回 —— 答案里同时出现两个物料的
+        验收口径，两句互相矛盾，而且后一句根本不属于问的那个物料。单看任何
+        一句都像是「有依据」，这正是它难以自查的原因。
 
         判据是查询与文档标题的 n-gram 重合度（`ScoredChunk.title_hit`）。
-        **只排除商品文档**：政策与 FAQ 是跨商品通用的，客户问某个商品时
-        运费规则、售后总则照样适用，把它们一起排除会把真正该引用的条款丢掉。
+        **只排除对象文档**：制度、规范与 FAQ 是跨对象通用的 —— 问某个物料时
+        验收规范、仓储制度照样适用，把它们一起排除会把真正该引用的条款丢掉。
+
+        当前语料全部是通用文档（没有按对象拆页的规格文档），这条收敛因此是
+        空转；保留它是因为「一物料一页」是可预见的下一批语料，判据与阈值
+        到那时候才真正起作用。
         """
         products = [c for c in ranked if c.chunk.kind == "product"]
         if len(products) <= 1:

@@ -139,18 +139,37 @@ def test_channel_weights_scale_fusion_without_changing_candidates():
 
 # ---------------------------------------------------------------- 端到端（真语料 + 真图）
 
-def test_relation_question_surfaces_graph_fact_on_top(knowledge_base):
-    """关系类问题里，三跳链图事实（0.667）排在所有文档片段前面。"""
-    ranked = knowledge_base.search(RELATION_Q)
+def test_graph_fact_keeps_preset_score_and_path_metadata(knowledge_base):
+    """图事实自带分与路径元数据：三跳链 raw 6.0 -> 0.667，key 可溯源。"""
+    candidates = knowledge_base.retriever.search(RELATION_Q, channel=Channel.RELATION)
+    ranked = knowledge_base.reranker.rerank(RELATION_Q, candidates)
+    fact = next(c for c in ranked if c.chunk.kind == "graph")
 
-    assert ranked
-    top = ranked[0]
-    assert top.chunk.kind == "graph"
-    assert top.chunk.doc_title == "供应链知识图谱"
-    assert top.chunk.metadata["graph_key"].startswith("M100023|substitute|M100031")
-    assert top.chunk.metadata["hops"] == 3
-    assert top.preset_raw == 6.0
-    assert top.rerank == pytest.approx(6 / 9, abs=1e-6)
+    assert fact.chunk.doc_title == "供应链知识图谱"
+    assert fact.chunk.metadata["graph_key"].startswith("M100023|substitute|M100031")
+    assert fact.chunk.metadata["hops"] == 3
+    assert fact.preset_raw == 6.0
+    assert fact.rerank == pytest.approx(6 / 9, abs=1e-6)
+
+
+def test_relation_question_surfaces_graph_fact_in_citations(knowledge_base):
+    """关系类问题：图事实必须进引用清单，事实原句必须进答案（引用配额）。
+
+    换域之后，制度语料里「替代料」「安全库存」这些词本来就密集，相关条款
+    拿到 0.85，而三跳链事实的绝对分封顶在 0.667 —— 分数不该为它让路，
+    但两类证据衡量的不是同一种东西（词面匹配 vs 路径完整度）。所以引用
+    里给它留一个位置（`rag/index.py::_keep_relation_evidence`），否则
+    「替代的是哪个料、哪个仓有货」会被制度条款挤掉，答成一篇流程说明。
+    """
+    answer = knowledge_base.ask(RELATION_Q)
+
+    assert answer.status == "answered"
+    titles = [c.title for c in answer.citations]
+    assert "供应链知识图谱" in titles, "关系通道必须至少引用一条图事实"
+    assert titles[-1] == "供应链知识图谱", (
+        "配额只加位、不改序：图事实按自己的绝对分排在引用末尾"
+    )
+    assert "M100031" in answer.answer, "替代料编码来自图节点属性，必须进答案"
 
 
 def _doc_question(kb: ProductKnowledgeBase) -> str:

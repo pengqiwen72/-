@@ -4,9 +4,9 @@
 库存（`sub_inventory`）与供应商（`sub_supplier`）两条链路都是**只读查询**，
 不该为了一句「M100023 还有多少库存」去调一次大模型 —— 定不了位顶多追问一句，
 定位错了却会把别的物料的数据答成它的（比不答更糟）。所以这两条链路的
-物料/仓库定位用同一套确定性规则：
+物料/仓库/供应商定位用同一套确定性规则：
 
-    编码直命中（M\\d{6} / WH\\d{2}） > 名称切段匹配
+    编码直命中（M\\d{6} / WH\\d{2} / S\\d{3}） > 名称切段匹配
 
 名称匹配沿用离线合成器（`llm/offline/synth_scm.py`）的切段打分：主数据全名是
 「冷轧钢板 1.2mm」而用户只说「冷轧钢板」，整名包含匹配永远命中不了；
@@ -26,6 +26,7 @@ from typing import List, Optional, Tuple
 #: 编码形态：与种子数据、图谱实体链接共用同一套口径
 _RE_MATERIAL_CODE = re.compile(r"\bM\d{6}\b")
 _RE_WAREHOUSE_CODE = re.compile(r"\bWH\d{2}\b")
+_RE_SUPPLIER_CODE = re.compile(r"\bS\d{3}\b")
 
 
 def match_by_name(candidates: List[dict], text: str,
@@ -70,6 +71,38 @@ def resolve_material(text: str, materials) -> Optional[object]:
     return None
 
 
+def resolve_supplier(text: str, suppliers) -> Optional[object]:
+    """把口语说法定位到一个供应商（返回 SupplierInfo，定位不到返回 None）。
+
+    供应商名称没有规格段（不像物料名「冷轧钢板 1.2mm」），整名就是一段，
+    所以名称命中要求全名出现——「宝钢华东物资有限公司」得写全。这是有意的：
+    供货商名字里「华东」这类词太容易半截撞车（「宝钢华东物资」与
+    「华东新材科技」都含「华东」），半匹配猜错一家比不答更糟。
+    """
+    if not text:
+        return None
+
+    hit = _RE_SUPPLIER_CODE.search(text)
+    if hit:
+        code = hit.group(0)
+        for s in suppliers or []:
+            if s.supplier_code == code:
+                return s
+        return None
+
+    candidates = [
+        {"supplier_code": s.supplier_code, "supplier_name": s.supplier_name}
+        for s in suppliers or []
+    ]
+    code, _ = match_by_name(candidates, text, "supplier_code", "supplier_name")
+    if not code:
+        return None
+    for s in suppliers or []:
+        if s.supplier_code == code:
+            return s
+    return None
+
+
 def resolve_warehouse(text: str, warehouses) -> Optional[object]:
     """把口语说法定位到一个仓库（返回 WarehouseInfo，定位不到返回 None）。"""
     if not text:
@@ -96,4 +129,4 @@ def resolve_warehouse(text: str, warehouses) -> Optional[object]:
     return None
 
 
-__all__ = ["match_by_name", "resolve_material", "resolve_warehouse"]
+__all__ = ["match_by_name", "resolve_material", "resolve_supplier", "resolve_warehouse"]

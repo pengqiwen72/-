@@ -559,7 +559,7 @@ def execute_node(state: SubGoodsReceiptState, config: RunnableConfig):
 
     updated = plan.model_copy(update={
         "status": "executed",
-        # 正式单号回填进方案（与电商侧 refund_id 同一手法）：
+        # 正式单号回填进方案（与采购下单回填 po_no 同一手法）：
         # 最终 render 的「收货单号」与实际登记到 WMS 的号只差这一步回填
         "receipt_no": str(result.get("receipt_no") or ""),
         "message": _executed_message(plan, result),

@@ -42,7 +42,7 @@ Phase 6 有「两路排名必须相同」的比对测试。改公式要同时改
 熔断快速失败，一律 `degrade.mark(L1)` 后返回空列表，把问题让给文档通道
 或转人工。故障注入走现成的 `MOCK_FAIL_ACTIONS=graph`（与 mock 端口的
 apply 同一开关）；连续失败到阈值（默认 3，`BREAKER_FAIL_THRESHOLD`）后
-`get_breaker("graph")` 打开，后续调用在 `_guard()` 处快速失败，冷却
+`get_breaker("graph")` 打开，后续调用在 `guard()` 处快速失败，冷却
 （默认 20 秒，`BREAKER_RESET_SECONDS`）结束后放一个探针试探 ——
 「前三次真失败、第四次快速失败」正是 `load_degraded` 场景演的东西。
 """
@@ -329,7 +329,7 @@ def route_relation(text: str) -> Tuple[str, ...]:
 def retrieve(text: str) -> List[GraphChunk]:
     """图谱通道入口（供检索链路调用）。**永不抛出**，失败降级 L1 返回空。
 
-    熔断记账放在这一层（而不是 `_guard` 里）：成功（含「没定位到物料」的
+    熔断记账放在这一层（而不是 `guard` 里）：成功（含「没定位到物料」的
     早退）记成功，真实失败记失败，被熔断挡下的调用**不记账** ——
     否则每次快速失败都会把冷却期往后推，冷却永远不会到期，恢复就演不出来。
     """
@@ -342,7 +342,7 @@ def retrieve(text: str) -> List[GraphChunk]:
 
     breaker = get_breaker("graph")
     try:
-        _guard()
+        guard()
         store = get_graph_store()
         code = link_material(text, store)
         if not code:
@@ -402,7 +402,7 @@ def as_chunks(facts: Sequence[GraphFact]) -> List[GraphChunk]:
 
 # ================================================================ 内部
 
-def _guard() -> None:
+def guard() -> None:
     """图谱通道的入口守卫：先问熔断器，再看故障注入。
 
     熔断器在前：确认在坏（连续失败到阈值）时连「这次要不要试一下」都省了，
@@ -411,6 +411,11 @@ def _guard() -> None:
 
     故障注入与 mock 端口的 `chaos.apply()` 是同一个开关的同一套语义 ——
     L1 降级演示用它，不另造强制开关。
+
+    公开（去掉下划线）是因为**不止 `retrieve()` 一个入口**：供应商子图的
+    履约评估也直接读图（`sub_supplier_node.py::_quoted_lines`）。两个入口
+    必须问同一个守卫 —— 否则 `MOCK_FAIL_ACTIONS=graph` 演示「图谱挂了」时，
+    问答链路降级了、履约评估却照常给出价格竞争力，同一次故障两种口径。
     """
     from integrations.mock.chaos import failing_actions
     from integrations.resilience import CircuitOpen, get_breaker

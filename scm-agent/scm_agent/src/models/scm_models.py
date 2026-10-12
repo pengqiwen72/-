@@ -557,4 +557,67 @@ class SupplierComparison(ScmBaseModel):
         lines = [f"【{self.material_name}（{self.material_code}）比价】{self.summary}"]
         lines.extend("  " + s.render() for s in self.scores)
         return "\n".join(lines)
+
+
+class SupplierPriceLine(ScmBaseModel):
+    ''' 供应商在单个物料上的报价竞争力（履约评估的明细行） '''
+    material_code: str = Field(default="", description="物料编码")
+    material_name: str = Field(default="", description="物料名称")
+    unit: str = Field(default="", description="计量单位")
+    unit_price: float = Field(default=0.0, description="本家报价（元）")
+    is_lowest: bool = Field(default=False, description="是否该物料的最低报价")
+    price_score: float = Field(default=0.0, description="价格分 = 该物料最低价 / 本家报价")
+
+    def render(self) -> str:
+        tag = "（最低报价）" if self.is_lowest else ""
+        return (
+            f"{self.material_code}（{self.material_name}）：报价 "
+            f"{self.unit_price:.2f} 元/{self.unit}，价格分 {self.price_score:.3f}{tag}"
+        )
+
+
+class SupplierEvaluation(ScmBaseModel):
+    ''' 供应商履约评估：基础履约指标 + 跨物料价格竞争力 + 综合评分
+
+    评分与 `SupplierComparison` 同一套加权口径（0.5/0.3/0.2），差别只在
+    价格分是**跨其报价的各物料**取平均——单家供应商没有「一个物料」当基准，
+    聚合后的平均价格分与比价场景里的价格分语义一致。
+    '''
+    supplier_code: str = Field(default="", description="供应商编码")
+    supplier_name: str = Field(default="", description="供应商名称")
+    is_new: bool = Field(default=False, description="是否新供应商（首单需审批）")
+    cooperation_since: str = Field(default="", description="合作起始（新供应商为空）")
+    lead_time_days: int = Field(default=0, description="承诺交期（天）")
+    on_time_rate: float = Field(default=0.0, description="历史准时交付率，[0,1]")
+    defect_rate: float = Field(default=0.0, description="历史到货不良率，[0,1]")
+    quoted_count: int = Field(default=0, description="有报价的物料数")
+    lowest_count: int = Field(default=0, description="其中报价最低的物料数")
+    avg_price_score: float = Field(default=0.0, description="跨物料的平均价格分")
+    score: float = Field(default=0.0, description="综合履约评分，[0,1]")
+    lines: List[SupplierPriceLine] = Field(default_factory=list, description="各物料报价竞争力")
+    note: str = Field(default="", description="降级或口径说明")
+    summary: str = Field(default="", description="一句话结论")
+
+    def render(self) -> str:
+        metrics = (
+            f"承诺交期 {self.lead_time_days} 天，准时交付率 {self.on_time_rate:.0%}，"
+            f"到货不良率 {self.defect_rate:.2%}"
+        )
+        lines = [f"【供应商履约评估：{self.supplier_name}（{self.supplier_code}）】{self.summary}"]
+        # 降级时 summary 就是这句基础指标（没有价格竞争力可概括），别再重复一行
+        if metrics not in self.summary:
+            lines.append(f"  {metrics}")
+        if self.lines:
+            lines.append(
+                f"  价格竞争力：{self.quoted_count} 个在报物料，其中 "
+                f"{self.lowest_count} 个为最低报价，平均价格分 {self.avg_price_score:.3f}"
+            )
+            lines.append(
+                f"  综合履约评分 {self.score:.3f}"
+                f"（0.5×价格分 + 0.3×准时率 + 0.2×质量）"
+            )
+            lines.extend("  " + line.render() for line in self.lines)
+        if self.note:
+            lines.append(f"  {self.note}")
+        return "\n".join(lines)
     

@@ -3,7 +3,7 @@ RAG 检索增强链路。
 
 分层（自下而上）：
 
-    document   语料加载：Markdown 知识文档 + 由 SKU 渲染的商品页
+    document   语料加载：Markdown 知识文档（目录名即 kind）
     chunking   语义分块：标题为界、表格原子、超长才切且带重叠
     embedding  字符 n-gram TF-IDF，L2 归一，稀疏字典
     retriever  混合召回：稠密余弦 + BM25，RRF 融合
@@ -15,7 +15,7 @@ RAG 检索增强链路。
 
     from rag import get_knowledge_base
     kb = get_knowledge_base()
-    kb.ask("保温杯保温多久？")        # -> RagAnswer
+    kb.ask("采购申请超过多少金额需要主管审批？")   # -> RagAnswer
 
 各层的设计取舍都写在对应模块的模块级 docstring 里，这里不重复。
 """

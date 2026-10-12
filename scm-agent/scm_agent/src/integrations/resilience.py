@@ -25,7 +25,8 @@
    **动作名**（material / purchase / …）计。三种后端（mock / http / mcp）
    共用同一套熔断名 —— 这样 `TOOL_GATEWAY=direct|mcp` 的行为才逐字段一致，
    而不是「直连会熔断、走网关不会」这种只在某条路径上存在的差异。
-2. **图谱**：`kg/query.py::_guard()`，名字固定 `graph`。
+2. **图谱**：`kg/query.py::guard()`，名字固定 `graph`（问答链路的图检索与
+   供应商履约评估都从它进门）。
 3. **HTTP 传输层**：`http/business_http.py::_HttpClient.request`，按上游地址
    计 —— 端口那层管「这个业务能力坏了」，这层管「这个地址坏了」，两层名字
    空间不同：业务层先短路，传输层兜住任何绕过端口的裸调用。

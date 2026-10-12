@@ -19,8 +19,8 @@ class Chunk:
 
     chunk_id: str
     doc_id: str
-    doc_title: str                      # 一级标题，如「售后与退换货总则」
-    section: str                        # 标题路径，如「售后与退换货总则 > 高金额退款审批」
+    doc_title: str                      # 一级标题，如「采购管理办法」
+    section: str                        # 标题路径，如「采购管理办法 > 审批规则」
     text: str                           # 已注入标题上下文的正文（用于检索与展示）
     source: str                         # 相对路径，用于出处展示
     kind: str = "policy"                # product / policy / faq
@@ -36,7 +36,7 @@ class Chunk:
         """剥掉开头的标题路径前缀，只留正文。
 
         `chunking` 会把标题路径拼进 `text` 做检索增强，但**展示与抽句时不能带着它**——
-        否则「售后与退换货总则 > 退款到账时效」会作为一句话被选进答案里，
+        否则「采购管理办法 > 审批规则」会作为一句话被选进答案里，
         因为它在字面上与查询高度重合。检索增强与答案呈现是两个不同的用途，
         这里把两者的边界显式划出来。
         """
@@ -73,7 +73,7 @@ class ScoredChunk:
     lexical: float = 0.0                # BM25 原始分（未归一）
     fused: float = 0.0                  # RRF 融合分（只用于排序）
     rerank: float = 0.0                 # 归一化后的重排绝对分，[0,1)
-    title_hit: float = 0.0              # 查询词与**文档标题**的重合度，用于判定「查询点名了哪个商品」
+    title_hit: float = 0.0              # 查询词与**文档标题**的重合度，用于判定「查询点名了哪个对象」
     preset_raw: float | None = None     # 候选自带的重排原始分（图事实），非 None 时重排层直接采用
 
     @property

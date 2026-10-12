@@ -13,9 +13,10 @@ warehouse / inventory / purchase / receipt / file / handoff），不是某个单
 「库存这一路挂了」，而不是「这一单刚好查不到」—— 后者是业务上的空结果，
 走的是另一条分支（NotFound / 空结果），两者必须能分别演示。
 
-`graph` 是唯一一个**不属于端口**的动作名：它的判定在 `kg/query.py::_guard()`
-里，注入「图谱服务不可用」，用来演示问答链路的 L1 降级（页脚与级别见
-`observability/degrade.py`）。开关是同一个，语义一致 —— 不另造强制开关。
+`graph` 是唯一一个**不属于端口**的动作名：它的判定在 `kg/query.py::guard()`
+里（问答链路的图检索与供应商履约评估共用这一个守卫），注入「图谱服务不可用」，
+用来演示问答链路的 L1 降级（页脚与级别见 `observability/degrade.py`）。开关是
+同一个，语义一致 —— 不另造强制开关。
 """
 
 from __future__ import annotations

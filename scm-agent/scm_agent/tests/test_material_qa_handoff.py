@@ -26,16 +26,30 @@ REAL_Q = "冷轧钢板的验收标准是什么？"
 
 
 def _corpus_derived_question(kb) -> str:
-    """从当前语料派生一个**必然有依据**的问题。
+    """从当前语料派生一个**必然有依据、且会被路由到问答子图**的问题。
 
     硬编具体问题会在换语料时失效（问的那条条款知识库里已经没有了）；改为
-    「语料里有什么就问什么」：取第一条正文的开头做问句，换哪本语料都成立。
-    首行可能是「**Q：……**」式的问答标题，先剥掉 Markdown 装饰再取前 40 字，
-    免得整行太长把查询词权重冲散。
+    「语料里有什么就问什么」：拿片段的章节名当问句（「替代料关系，具体是
+    怎么规定的？」），逐个验两条 —— 知识库能作答，且意图关键词打分把
+    material_qa 排在第一（语义意图那一层是关键词打分为主）。两条都满足
+    才算数：换哪本语料都成立，也免得派生出一个被路由去采购子图的问题、
+    让这条用例红在一个与它要守的语义无关的地方。
     """
-    first_line = kb.chunks[0].body.splitlines()[0].strip().strip("*").strip()
-    fragment = first_line.removeprefix("Q：")[:40]
-    return f"{fragment}，具体是怎么规定的？"
+    from llm.offline.lexicons import INTENT_KEYWORDS, score_intent_by_keywords
+
+    qa_intent = "material_qa"
+    for chunk in kb.chunks:
+        section = chunk.section.split(">")[-1].strip()
+        if len(section) < 3:
+            continue
+        question = f"{section}，具体是怎么规定的？"
+        if kb.ask(question).status != "answered":
+            continue
+        scores = {k: score_intent_by_keywords(question, k) for k in INTENT_KEYWORDS}
+        mine = scores.pop(qa_intent, 0)
+        if mine > 0 and mine > max(scores.values(), default=0):
+            return question
+    raise AssertionError("当前语料里派生不出「有依据且归问答意图」的问题")
 
 
 def test_below_confidence_question_becomes_handoff_instead_of_a_hard_answer(runner, monkeypatch):

@@ -1,8 +1,8 @@
 """
-商品咨询回答生成（在线模式）。
+制度问答回答生成（在线模式）。
 
 这是「模型只负责转述」里模型那一半：它拿到的是**已经检索好、原文照抄**的事实单，
-任务只是把事实单改写成一句口语化的客服回复。
+任务只是把事实单改写成一句口语化的助手回复。
 
 真正的约束不在提示词里，而在调用方 `rag.answer.verify_no_new_numbers`：
 模型输出之后会逐个数字比对，任何事实单里没有的数字都会被判定为编造，
@@ -22,7 +22,7 @@ logger = get_logger("llm_rag_answer")
 
 
 def llm_rag_answer(question: str, facts: str) -> str:
-    """把事实单转述成客服回复。返回纯文本（非 JSON）。
+    """把事实单转述成助手回复。返回纯文本（非 JSON）。
 
     签名刻意与 `rag.index.ProductKnowledgeBase.ask(generator=...)` 约定的
     `(question, facts) -> str` 对齐，可以直接作为生成器传入。

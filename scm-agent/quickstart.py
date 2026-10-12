@@ -170,11 +170,27 @@ def _print_state_summary(state: dict) -> None:
             print(f"  结论：{inventory.summary}")
 
     supplier = state.get("supplier_query")
-    if supplier is not None:
+    if supplier is not None and hasattr(supplier, "scores"):
+        # 比价排名（定位到物料）
         print(f"\n  比价结果：{supplier.material_name}（{supplier.material_code}）"
               f"  最优 {supplier.best_supplier_code or '—'}")
         for score in supplier.scores:
             print(f"    {score.render()}")
+        if supplier.summary:
+            print(f"  结论：{supplier.summary}")
+    elif supplier is not None and hasattr(supplier, "lead_time_days"):
+        # 履约评估（定位到供应商）—— 两个模型共用 supplier_query 字段
+        print(f"\n  履约评估：{supplier.supplier_name}（{supplier.supplier_code}）"
+              f"  交期 {supplier.lead_time_days} 天"
+              f"  准时率 {supplier.on_time_rate:.0%}"
+              f"  不良率 {supplier.defect_rate:.2%}"
+              f"{'  新供应商' if supplier.is_new else ''}")
+        if supplier.lines:
+            print(f"  价格竞争力：{supplier.quoted_count} 个在报物料，"
+                  f"{supplier.lowest_count} 个最低报价，平均价格分 {supplier.avg_price_score:.3f}")
+            print(f"  综合履约评分 {supplier.score:.3f}")
+        if supplier.note:
+            print(f"  说明：{supplier.note}")
         if supplier.summary:
             print(f"  结论：{supplier.summary}")
 

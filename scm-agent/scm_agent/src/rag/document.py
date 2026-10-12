@@ -1,22 +1,21 @@
 """
 语料加载：把「知识库」变成一份扁平的文档列表。
 
-知识库有两个来源，这里刻意用两种不同的处理方式：
+**语料只有一种来源：人工维护的 Markdown**（`data/knowledge/**/*.md`）——
+制度、规范、FAQ 这类需要反复迭代措辞的内容，直接用文档本身，改完下次构建
+索引即生效；目录名即 kind（policies / materials / faq），新增一类语料只需
+新建目录。
 
-1. **人工维护的 Markdown**（`data/knowledge/**/*.md`）——政策、FAQ 这类需要
-   反复迭代措辞的内容，直接用文档本身，改完下次构建索引即生效。
-
-2. **结构化的商品目录**（`data/seed/products.json`）——商品参数是结构化数据，
-   真正权威的是 SKU 表而不是某段文案。所以这里**在构建索引时把 SKU 渲染成
-   商品页**，而不是把商品文案再手工抄一遍。这样商品改价、改参数只需改一处，
-   不会出现「知识库说 199、订单系统说 229」这种经典事故。
+（早先的版本还有一个来源：把 `data/seed/*.json` 里的结构化商品目录渲染成
+商品页文档。换到供应链域后语料全部是制度类 Markdown，那条路径已删除——
+留着一份永不命中的加载器，只会在每次建索引时多打一行「目录不存在」的
+警告，还会让人以为另有语料没被加载。）
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from utils.agent_logger import get_logger
 
@@ -26,7 +25,6 @@ logger = get_logger("rag_document")
 # （词法 parents，不写 .resolve()：见 utils/env_loader.py 的说明）
 _DATA_DIR = Path(__file__).parents[2] / "data"
 KNOWLEDGE_DIR = _DATA_DIR / "knowledge"
-SEED_DIR = _DATA_DIR / "seed"
 
 
 class RawDocument:
@@ -98,97 +96,11 @@ def _first_heading(text: str) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------- 商品目录
-
-#: 商品页渲染顺序。用列表而不是遍历 dict，是为了让同一 SKU 每次生成的文本完全一致
-#: ——否则索引重建后 chunk 内容漂移，引用的可比性就没了。
-_SECTION_LABELS = {
-    "specs": "规格参数",
-    "warranty": "质保说明",
-    "shipping": "发货与运费",
-    "after_sale": "售后政策",
-}
-
-
-def render_product_page(sku: Dict[str, Any]) -> str:
-    """把一个 SKU 字典渲染成商品页 Markdown。"""
-    lines: List[str] = []
-    name = sku.get("product_name", "")
-    lines.append(f"# {name}")
-    lines.append("")
-    lines.append(
-        f"商品编号：{sku.get('sku_id', '')}　品牌：{sku.get('brand', '')}　"
-        f"分类：{sku.get('category', '')}　售价：{sku.get('price', '')} 元"
-    )
-    lines.append("")
-
-    for key, label in _SECTION_LABELS.items():
-        block = sku.get(key) or {}
-        if not isinstance(block, dict) or not block:
-            continue
-        lines.append(f"## {label}")
-        lines.append("")
-        lines.append("| 项目 | 说明 |")
-        lines.append("|---|---|")
-        for k, v in block.items():
-            lines.append(f"| {k} | {_stringify(v)} |")
-        lines.append("")
-
-    return "\n".join(lines).strip() + "\n"
-
-
-def _stringify(value: Any) -> str:
-    if isinstance(value, (list, tuple)):
-        return "、".join(str(v) for v in value)
-    return str(value)
-
-
-def load_product_documents(seed_dir: Optional[Path] = None) -> List[RawDocument]:
-    """把 `products.json` 里的 SKU 渲染成商品页文档。"""
-    seed_dir = seed_dir or SEED_DIR
-    path = seed_dir / "products.json"
-    if not path.exists():
-        logger.warning(f"商品目录不存在：{path}")
-        return []
-
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"商品目录解析失败：{e}")
-        return []
-
-    items: Iterable[Dict[str, Any]] = payload.get("products", []) if isinstance(payload, dict) else payload
-
-    docs: List[RawDocument] = []
-    for sku in items:
-        if not isinstance(sku, dict) or not sku.get("sku_id"):
-            continue
-        docs.append(
-            RawDocument(
-                doc_id=str(sku["sku_id"]),
-                title=str(sku.get("product_name", sku["sku_id"])),
-                text=render_product_page(sku),
-                source=_relative(path),
-                kind="product",
-                metadata={
-                    "sku_id": sku["sku_id"],
-                    "category": sku.get("category", ""),
-                    "brand": sku.get("brand", ""),
-                    "price": sku.get("price", ""),
-                },
-            )
-        )
-
-    logger.info(f"渲染商品页 {len(docs)} 篇")
-    return docs
-
-
 # ---------------------------------------------------------------- 汇总
 
-def load_corpus(root: Optional[Path] = None,
-                seed_dir: Optional[Path] = None) -> List[RawDocument]:
-    """加载全部语料（知识文档 + 商品页）。"""
-    return load_markdown_documents(root) + load_product_documents(seed_dir)
+def load_corpus(root: Optional[Path] = None) -> List[RawDocument]:
+    """加载全部语料（当前即全部知识文档）。"""
+    return load_markdown_documents(root)
 
 
 def corpus_fingerprint(docs: List[RawDocument]) -> str:
