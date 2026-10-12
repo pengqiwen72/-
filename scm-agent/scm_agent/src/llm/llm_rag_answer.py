@@ -24,7 +24,7 @@ logger = get_logger("llm_rag_answer")
 def llm_rag_answer(question: str, facts: str) -> str:
     """把事实单转述成助手回复。返回纯文本（非 JSON）。
 
-    签名刻意与 `rag.index.ProductKnowledgeBase.ask(generator=...)` 约定的
+    签名刻意与 `rag.index.KnowledgeBase.ask(generator=...)` 约定的
     `(question, facts) -> str` 对齐，可以直接作为生成器传入。
     """
     from llm.llm_setting import chat_model as llm

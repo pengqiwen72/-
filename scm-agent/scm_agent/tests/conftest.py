@@ -6,7 +6,7 @@ pytest 公共装置：把测试钉在「离线 + 进程内」这一条轨道上�
 1. **测试永远不联网。** `LLM_MODE=offline` / `INTEGRATION_MODE=mock` /
    `TOOL_GATEWAY=direct` 必须在**任何 src 代码被 import 之前**写进环境变量：
    `llm/llm_setting.py`、`integrations/factory.py` 都在 import 期或首次调用时
-   就读环境，晚一步就会真的去连 dashscope / 企业微信。这里用直接赋值而不是
+   就读环境，晚一步就会真的去连 dashscope / 业务系统。这里用直接赋值而不是
    `setdefault`——`setdefault` 在有人导出过 `LLM_MODE=live` 的机器上会放行，
    测试就变成「本地绿、CI 红」甚至「偷偷烧 token」。
    （`python-dotenv` 的 `load_dotenv()` 默认不覆盖已有变量，所以 `scm_agent/.env`
@@ -113,7 +113,7 @@ def _isolated_runtime():
 
 @pytest.fixture
 def knowledge_base():
-    """离线商品知识库（按语料指纹缓存，整个会话只构建一次）。"""
+    """离线知识库（按语料指纹缓存，整个会话只构建一次）。"""
     from rag.index import get_knowledge_base
 
     return get_knowledge_base()

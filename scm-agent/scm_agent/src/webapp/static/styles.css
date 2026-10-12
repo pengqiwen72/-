@@ -1,4 +1,4 @@
-/* 坐席工作台样式。
+/* 演示工作台样式。
  *
  * 页面挂在 /scm/workbench 下（见 webapp.py 的 StaticFiles 挂载），所以
  * **所有资源引用都必须用相对路径**，否则换一个前缀就全 404。
@@ -314,3 +314,56 @@ table.mini td.k { color: var(--muted); white-space: nowrap; width: 34%; }
   color: var(--err);
 }
 .alert[hidden] { display: none; }
+
+/* ==================== 通用说明文字 / 改判表单 ==================== */
+
+.explain { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; line-height: 1.7; }
+
+.patch {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+}
+.patch .explain { margin: 0 0 10px; }
+.patch .actions { margin-top: 12px; }
+.patch-field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+.patch-field span { color: var(--muted); min-width: 132px; }
+.patch-field input, .patch-field select {
+  flex: 1;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+/* ==================== 待办角标与浮层 ==================== */
+
+.todo-btn { margin-right: 10px; }
+.todo-btn b { color: var(--warn); font-weight: 700; }
+
+.todo-panel {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  z-index: 20;
+  width: 340px;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+.todo-panel[hidden] { display: none; }
+.todo-head { font-size: 12px; color: var(--faint); padding: 8px 10px 6px; }
+.todo-item { padding: 9px 10px; border-radius: 9px; cursor: pointer; }
+.todo-item:hover { background: var(--brand-soft); }
+.todo-title { font-size: 13.5px; font-weight: 600; }
+.todo-detail { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+.todo-meta { font-size: 11.5px; color: var(--faint); margin-top: 3px; }

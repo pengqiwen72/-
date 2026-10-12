@@ -18,7 +18,7 @@ import pytest
 from kg.query import GraphChunk
 from observability import degrade as degrade_mod
 from rag.expansion import expand_query
-from rag.index import ProductKnowledgeBase
+from rag.index import KnowledgeBase
 from rag.rerank import LexicalReranker
 from rag.retriever import HybridRetriever
 from rag.router import Channel, classify
@@ -67,7 +67,7 @@ def test_preset_raw_is_adopted_and_beats_zero_lexical_match():
 
     assert ranked[0].preset_raw == 5.5
     assert ranked[0].rerank == pytest.approx(5.5 / 8.5, abs=1e-9), "必须套用同一套饱和映射"
-    assert ranked[0].title_hit == 0.0, "图 chunk 的「标题」是图文档名，不该参与商品维度收敛"
+    assert ranked[0].title_hit == 0.0, "图 chunk 的「标题」是图文档名，不该参与物料维度收敛"
     # 同一段文字、没有自带分的那条被词法打了 0 分 —— 图事实若也走词法就会输给它
     assert ranked[1].rerank == 0.0
 
@@ -172,7 +172,7 @@ def test_relation_question_surfaces_graph_fact_in_citations(knowledge_base):
     assert "M100031" in answer.answer, "替代料编码来自图节点属性，必须进答案"
 
 
-def _doc_question(kb: ProductKnowledgeBase) -> str:
+def _doc_question(kb: KnowledgeBase) -> str:
     """从语料里挑一个「标题不含关系词」的文档，用标题造一个纯文档类问题。
 
     现取而不是硬编：换语料后这条用例的语义（文档问题走纯文档通道）不依赖
@@ -235,7 +235,7 @@ def test_l2_footer_when_document_channel_is_empty():
     """文档通道不可用（空语料）：仅凭图事实作答，页脚如实相告。"""
     from kg.query import retrieve as graph_retrieve
 
-    kb = ProductKnowledgeBase(chunks=[], graph_retrieve=graph_retrieve)
+    kb = KnowledgeBase(chunks=[], graph_retrieve=graph_retrieve)
     answer = kb.ask(RELATION_Q)
 
     assert degrade_mod.current() == degrade_mod.DegradeLevel.L2

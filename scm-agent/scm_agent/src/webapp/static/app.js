@@ -1,4 +1,4 @@
-/* 坐席工作台前端。
+/* 演示工作台前端。
  *
  * 接口地址一律用**绝对路径** `/scm/...`：页面本身挂在 `/scm/workbench` 下，
  * 用相对路径会拼成 `/scm/workbench/scm/chat/stream`。静态资源则相反，必须相对。
@@ -26,13 +26,13 @@ const API = {
   state: (id) => '/scm/state/' + encodeURIComponent(id),
 };
 
-const KEY = { token: 'scm_token', user: 'scm_user', thread: 'scm_last_thread' };
+const KEY = { token: 'scm_token', user: 'scm_user', thread: 'scm_last_thread', todos: 'scm_todos' };
 
 const $ = (id) => document.getElementById(id);
 
 // ==================== 小工具 ====================
 
-/** 建 DOM。数据来自图（客户原话、模型输出），一律走 textContent，不拼 innerHTML。 */
+/** 建 DOM。数据来自图（用户原话、模型输出），一律走 textContent，不拼 innerHTML。 */
 function el(tag, attrs = {}, ...kids) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -155,24 +155,32 @@ function addMessage(role, text) {
 }
 
 // 少数几步不是「又走了一步」，而是链路里的关键判断，用颜色把它们从流水账里挑出来
+// （阶段名必须与 observability/progress.py 的 STAGE_LABELS 对齐：
+//  写错的阶段名不会报错，只是这一行的圆点永远是灰的）
 const TONE = {
   handoff: 'warn',
+  degrade: 'warn',
   idempotent_replay: 'warn',
   idempotent_conflict: 'warn',
-  report_verify_failed: 'warn',
-  refund_submitted: 'ok',
+  hitl_rejected: 'warn',
   policy_match: 'ok',
-  report_built: 'ok',
+  quality_check: 'ok',
+  hitl_recreate: 'ok',
+  purchase_submitted: 'ok',
+  receipt_submitted: 'ok',
 };
 
-// 少数阶段天生啰嗦：`normalize`（字段归一）是把整张字段映射表逐条上报的，
-// 订单链路一次能刷 24 行，把整条链路淹掉。这类阶段折成一行「字段归一 ×24」，
-// 点开看逐条。
+// 少数阶段天生啰嗦：同一个阶段名一次能刷几十行（字段归一那类「逐条上报映射表」
+// 的阶段），把整条链路淹掉。这类阶段折成一行「×× ×24」，点开看逐条。
 //
 // 为什么用白名单而不是「连续 ≥N 条同名就折」：数据装载那 7 行也同名，但每行说的是
-// **不同的数据源**（欢迎语 / 坐席 / 标签体系 / 客户 / 会话 / 客服会话 / 订单），
+// **不同的数据源**（欢迎语 / 操作员 / 物料 / 供应商 / 仓库 / 库存 / 采购订单），
 // 折起来正好丢掉「统一状态模型汇多源数据」这件事 —— 而那是要展示的重点。
-const COLLAPSIBLE = new Set(['normalize']);
+//
+// ⚠️ 当前是**空表**：现在的链路没有逐条刷屏的阶段（字段归一轨迹走了日志，
+// 不再逐条上报）。机制留在 `addStep` 里也留了用例（`tests/frontend/timeline_check.mjs`
+// 自己往表里放一个阶段来验折叠），将来哪条链路开始逐条上报，在这里登记一行即可。
+const COLLAPSIBLE = new Set();
 
 /** 普通的一行。 */
 function stepRow(ev) {
@@ -239,12 +247,17 @@ function addStep(ev) {
   timeline.scrollTop = timeline.scrollHeight;
 }
 
-/** 判断审批卡片的形态 —— 三种中断的载荷字段不同。 */
+/** 判断审批卡片的形态。
+ *
+ * ⚠️ 先看 `type`，**不能**靠 `plan_id` 之类的字段碰运气：采购与质检两种中断
+ * 都带 `plan_id`，拿它判别形态会把复核卡按采购卡的字段去渲染 —— 页面不报错，
+ * 只是每个字段都错位（只有肉眼看才发现）。这张表只认 `type`，认不出来就落
+ * 兜底（原样展示 JSON），至少不会把人引到错误的结论上。
+ */
 function approvalKind(v) {
   if (!v || typeof v !== 'object') return 'generic';
-  if (v.plan_id || v.type === 'after_sale_approval') return 'aftersale';
-  if (v.old_tags || v.new_tags) return 'tag';
-  if (v.old_profile || v.new_profile) return 'profile';
+  if (v.type === 'purchase_approval') return 'purchase';
+  if (v.type === 'quality_review') return 'quality';
   return 'generic';
 }
 
@@ -257,34 +270,117 @@ function kv(pairs) {
   return list;
 }
 
-function tagChips(items, cls) {
-  return (items || []).map((t) => el('span', { class: 'tag ' + (cls || '') },
-    t.tag_name || t.tag_id || '?',
-    t.tag_reason ? el('span', { class: 'why', text: t.tag_reason }) : null));
+const label = (name, code) => (name && code ? name + '（' + code + '）' : (name || code || ''));
+const num = (v) => (typeof v === 'number' ? String(+v.toFixed(4)) : String(v == null ? '' : v));
+const money = (v) => (typeof v === 'number' ? v.toFixed(2) + ' 元' : String(v == null ? '' : v));
+
+/** 策略引擎的判定依据（✓ 命中 / ✗ 未命中）—— 两种卡片共用。 */
+function reasonTrace(payload) {
+  const lines = payload.reason_trace || [];
+  if (!lines.length) return null;
+  const trace = el('ul', { class: 'trace' });
+  for (const line of lines) trace.append(el('li', { text: line }));
+  return el('div', {},
+    el('div', { class: 'explain', text: '判定依据（策略引擎逐条比对，✓ 命中 / ✗ 未命中）：' }),
+    trace);
 }
 
-/** 画像是新旧两份清单，按 item_name 对齐成「改动表」，只把变化的行标出来。 */
-function profileTable(oldItems, newItems) {
-  const oldMap = new Map((oldItems || []).map((i) => [i.item_name, i.item_value]));
-  const table = el('table', { class: 'mini' },
-    el('thead', {}, el('tr', {},
-      el('th', { text: '画像项' }), el('th', { text: '原值' }), el('th', { text: '新值' }))));
+function purchaseCard(payload) {
+  return [
+    kv([
+      ['方案', payload.plan_id],
+      ['申请单', payload.biz_id],
+      ['物料', label(payload.material_name, payload.material_code)],
+      ['数量', payload.qty != null ? num(payload.qty) + (payload.unit || '') : ''],
+      ['单价', money(payload.unit_price)],
+      ['金额', money(payload.amount)],
+      ['到货仓库', payload.target_warehouse],
+      ['供应商', label(payload.supplier_name, payload.supplier_code)],
+      ['预计到货', payload.expect_arrival],
+      ['命中条款', payload.policy_id],
+      ['轮次', payload.revision ? '第 ' + (payload.revision + 1) + ' 轮' : ''],
+    ]),
+    reasonTrace(payload),
+    el('p', { class: 'explain', text:
+      '⚠ 批准后由独立的执行节点下达采购订单；中断节点本身没有副作用，' +
+      '所以重复提交不会重复下单。价格或供应商不合适时，用「改判重报」带上修改重走策略引擎。' }),
+  ];
+}
 
-  const body = el('tbody');
-  let changed = 0;
-  for (const item of newItems || []) {
-    const before = oldMap.get(item.item_name);
-    const isNew = !oldMap.has(item.item_name);
-    const diff = isNew || String(before) !== String(item.item_value);
-    if (diff) changed += 1;
-    body.append(el('tr', { style: diff ? 'background:#f3fbf5' : '' },
-      el('td', { class: 'k', text: item.item_name }),
-      el('td', { text: isNew ? '（新增）' : (before || '—') }),
-      el('td', { text: item.item_value || '—' })));
+function qualityCard(payload) {
+  return [
+    kv([
+      ['方案', payload.plan_id],
+      ['收货单', payload.biz_id],
+      ['采购订单', payload.po_no],
+      ['物料', label(payload.material_name, payload.material_code)],
+      ['到货仓库', payload.warehouse_code],
+      ['供应商', payload.supplier_code],
+      ['预计数量', num(payload.qty_expected)],
+      ['实收数量', num(payload.qty_received)],
+      ['不良数量', num(payload.qty_defect)],
+      ['不良率', payload.defect_rate != null ? (payload.defect_rate * 100).toFixed(2) + '%' : ''],
+      ['不良类型', payload.defect_type],
+      ['当前处置', payload.disposition],
+      ['命中条款', payload.policy_id],
+      ['轮次', payload.revision ? '第 ' + (payload.revision + 1) + ' 轮' : ''],
+    ]),
+    reasonTrace(payload),
+    el('p', { class: 'explain', text:
+      '⚠ 不良率超阈值，入库前需要人工复核。批准按当前处置执行；驳回按整批退货处理；' +
+      '也可以用「改判重报」换一种处置方式 —— 不良率是既有事实，复判仍会命中同一条款，' +
+      '所以改判后会再确认一轮，绝不静默放行。' }),
+  ];
+}
+
+/** 「改判重报」的小表单：字段与节点的 patch 白名单一致，没改动的字段不提交。 */
+function patchForm(payload) {
+  const kind = approvalKind(payload);
+  const specs = kind === 'purchase' ? [
+    { key: 'supplier_code', label: '供应商编码（如 S001）', value: payload.supplier_code || '' },
+    { key: 'qty', label: '数量（同申请单位）', value: payload.qty != null ? num(payload.qty) : '', numeric: true },
+    { key: 'target_warehouse', label: '到货仓库（如 WH01）', value: payload.target_warehouse || '' },
+  ] : kind === 'quality' ? [
+    { key: 'disposition', label: '处置方式', value: payload.disposition || '', options: ['入库', '让步接收', '退货', '换货'] },
+  ] : [];
+  if (!specs.length) return null;
+
+  const inputs = new Map();
+  const box = el('div', { class: 'patch' },
+    el('div', { class: 'explain', text:
+      '改判重报：只提交改动过的字段。白名单之外的字段节点会忽略并把原因写进轨迹，不会静默生效。' }));
+
+  for (const spec of specs) {
+    let field;
+    if (spec.options) {
+      field = el('select');
+      for (const opt of spec.options) field.append(el('option', { value: opt, text: opt }));
+      if (spec.options.includes(spec.value)) field.value = spec.value;
+    } else {
+      field = el('input', { type: 'text', value: spec.value });
+    }
+    inputs.set(spec.key, { spec, field });
+    box.append(el('label', { class: 'patch-field' }, el('span', { text: spec.label }), field));
   }
-  table.append(body);
-  return el('div', {}, table,
-    el('p', { class: 'explain', text: '共 ' + (newItems || []).length + ' 项，其中 ' + changed + ' 项有变化。' }));
+
+  const submit = el('button', { class: 'primary', text: '提交改判' });
+  submit.addEventListener('click', () => {
+    const patch = {};
+    for (const [key, { spec, field }] of inputs) {
+      const value = String(field.value || '').trim();
+      if (!value) continue;
+      if (!spec.options && value === String(spec.value)) continue;      // 没改的字段不提交
+      patch[key] = spec.numeric && !Number.isNaN(Number(value)) ? Number(value) : value;
+    }
+    if (!Object.keys(patch).length) {
+      addStep({ stage: 'error', label: '改判重报', detail: '没有任何字段被改动，已取消提交' });
+      return;
+    }
+    decide('recreate', patch);
+  });
+
+  box.append(el('div', { class: 'actions' }, submit));
+  return box;
 }
 
 function renderApproval(payload) {
@@ -292,46 +388,23 @@ function renderApproval(payload) {
   const kind = approvalKind(payload);
   const nodes = [el('p', { class: 'desc', text: payload.description || '需要你的确认' })];
 
-  if (kind === 'aftersale') {
-    nodes.push(kv([
-      ['方案', payload.plan_id],
-      ['订单', payload.order_id],
-      ['处理方式', payload.refund_type],
-      ['退款金额', payload.amount != null ? payload.amount + ' 元' : ''],
-    ]));
-    const trace = el('ul', { class: 'trace' });
-    for (const line of payload.reason_trace || []) trace.append(el('li', { text: line }));
-    if (payload.reason_trace && payload.reason_trace.length) {
-      nodes.push(el('div', { class: 'explain', text: '判定依据（政策引擎逐条比对，✓ 命中 / ✗ 未命中）：' }));
-      nodes.push(trace);
-    }
-    nodes.push(el('p', { class: 'explain', text:
-      '⚠ 金额超过自动处理额度。批准后由独立的执行节点发起退款；' +
-      '中断节点本身没有副作用，所以重复提交不会重复退款。' }));
-  } else if (kind === 'tag') {
-    const oldTags = (payload.old_tags || {}).customer_tags || [];
-    const add = (payload.new_tags || {}).tag_ids_add || [];
-    const remove = (payload.new_tags || {}).tag_ids_remove || [];
-    nodes.push(el('div', { class: 'explain', text: '当前标签' }));
-    nodes.push(el('div', {}, tagChips(oldTags)));
-    nodes.push(el('div', { class: 'explain', text: '本次新增' }));
-    nodes.push(el('div', {}, add.length ? tagChips(add, 'add') : el('span', { class: 'explain', text: '（无）' })));
-    if (remove.length) {
-      nodes.push(el('div', { class: 'explain', text: '本次移除' }));
-      nodes.push(el('div', {}, tagChips(remove, 'remove')));
-    }
-  } else if (kind === 'profile') {
-    nodes.push(profileTable(
-      (payload.old_profile || {}).profile_items,
-      (payload.new_profile || {}).profile_items));
-  } else {
-    nodes.push(el('pre', { class: 'trace', text: JSON.stringify(payload, null, 2) }));
-  }
+  if (kind === 'purchase') nodes.push(...purchaseCard(payload));
+  else if (kind === 'quality') nodes.push(...qualityCard(payload));
+  else nodes.push(el('pre', { class: 'trace', text: JSON.stringify(payload, null, 2) }));
+
+  let form = null;                       // 改判表单：点「改判重报」时才挂出来
+  const toggle = () => {
+    if (form) { form.remove(); form = null; return; }
+    form = patchForm(payload);
+    if (!form) { decide('recreate'); return; }   // 兜底卡片没有可改字段，直接重报
+    body.insertBefore(form, buttons);
+    form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
 
   const buttons = el('div', { class: 'actions' },
-    el('button', { class: 'primary', text: '确认', onclick: () => decide('ok') }),
-    el('button', { text: '放弃', onclick: () => decide('discard') }),
-    el('button', { text: '重新生成', onclick: () => decide('recreate') }));
+    el('button', { class: 'primary', text: '批准', onclick: () => decide('ok') }),
+    el('button', { text: '驳回', onclick: () => decide('discard') }),
+    el('button', { text: '改判重报', onclick: toggle }));
 
   nodes.push(buttons);
   body.replaceChildren(...nodes);
@@ -377,8 +450,11 @@ function handleEvent(frame) {
     setThread(data.thread_id);
     const first = (data.interrupts || [])[0];
     if (first) renderApproval(first.value || {});
+  } else if (name === 'todo') {
+    saveTodo(data.item || {});
   } else if (name === 'done') {
     setThread(data.thread_id);
+    dropTodo(data.thread_id);            // 这一单批完了，待办里不再挂着
     $('approvalCard').hidden = true;
     const answer = (data.task_result || {}).task_result;
     renderResult(data.task_result, data.thread_id);
@@ -420,12 +496,78 @@ function send() {
   runStream(API.chat, { task_input: text });
 }
 
-function decide(decision) {
+function decide(decision, patch) {
   if (!state.threadId || state.running) return;
-  addMessage('user', { ok: '确认', discard: '放弃', recreate: '重新生成' }[decision] + '（人工审批）');
+  const extra = patch && Object.keys(patch).length ? '　' + JSON.stringify(patch) : '';
+  addMessage('user', { ok: '批准', discard: '驳回', recreate: '改判重报' }[decision] + '（人工审批）' + extra);
   $('approvalCard').hidden = true;
 
-  runStream(API.resume, { thread_id: state.threadId, decision });
+  const body = { thread_id: state.threadId, decision };
+  if (patch && Object.keys(patch).length) body.patch = patch;
+  runStream(API.resume, body);
+}
+
+// ==================== 待办（本地的） ====================
+
+/* 待办清单只存在浏览器里（localStorage）。后端在 interrupt 之前不写任何状态
+ * —— HITL 的第一条不变量就是「中断节点重放时无副作用」，为了记住待办去落一次
+ * store 会让同一笔审批恢复两次就记两条。所以后端只推一条 `todo` 帧（纯渲染，
+ * 见 chat_routes.todo_item），清单在此维护：收到帧写入、done / error 移除。
+ */
+
+function readTodos() {
+  try {
+    const list = JSON.parse(localStorage.getItem(KEY.todos) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTodos(list) {
+  localStorage.setItem(KEY.todos, JSON.stringify(list.slice(0, 20)));
+  renderTodos();
+}
+
+function saveTodo(item) {
+  const list = readTodos().filter((t) => t.thread_id !== item.thread_id);
+  list.unshift(item);                        // 最新的一笔排最前（同一会话只留一条）
+  writeTodos(list);
+}
+
+function dropTodo(threadId) {
+  if (!threadId) return;
+  const list = readTodos();
+  const rest = list.filter((t) => t.thread_id !== threadId);
+  if (rest.length !== list.length) writeTodos(rest);
+}
+
+function renderTodos() {
+  const list = readTodos();
+  const btn = $('todoBtn');
+  const panel = $('todoPanel');
+  btn.hidden = list.length === 0;
+  $('todoCount').textContent = String(list.length);
+  if (!list.length) {
+    panel.hidden = true;
+    panel.replaceChildren();
+    return;
+  }
+  panel.replaceChildren(
+    el('div', { class: 'todo-head', text: '待人工确认（' + list.length + '）' }),
+    ...list.map((t) => el('div', { class: 'todo-item', onclick: () => openTodo(t.thread_id) },
+      el('div', { class: 'todo-title', text: t.title || '待人工确认' }),
+      el('div', { class: 'todo-detail', text: t.detail || '' }),
+      el('div', { class: 'todo-meta', text: (t.ts || '') + '　会话 ' + String(t.thread_id || '').replace(/^scm-/, '').slice(0, 12) }))));
+}
+
+/** 点待办 = 把那个会话调回来（审批卡片重新渲染，接着批）。 */
+async function openTodo(threadId) {
+  if (state.running || !threadId) return;
+  $('todoPanel').hidden = true;
+  resetPanels();
+  localStorage.setItem(KEY.thread, threadId);
+  await restore();
 }
 
 /** 刷新后把界面恢复成中断前的样子 —— 否则审批卡片一刷新就没了。 */
@@ -442,8 +584,10 @@ async function restore() {
       const first = (data.interrupts || [])[0];
       addMessage('bot', '上一轮停在人工审批，已为你恢复审批卡片。');
       if (first) renderApproval(first.value || {});
-    } else if (data.task_result) {
-      renderResult(data.task_result, threadId);
+    } else {
+      // 这个会话已经不在等人的队伍里了（别处批过 / 已跑完）：待办里的那条是旧的
+      dropTodo(threadId);
+      if (data.task_result) renderResult(data.task_result, threadId);
     }
   } catch {
     /* 恢复失败不算错误：就当一个干净的新页面 */
@@ -488,7 +632,7 @@ async function loadSamples() {
     location.replace('login.html');
     return;
   }
-  $('agentName').textContent = localStorage.getItem(KEY.user) || '坐席';
+  $('agentName').textContent = localStorage.getItem(KEY.user) || '操作员';
 
   $('sendBtn').addEventListener('click', send);
   $('logoutBtn').addEventListener('click', () => {
@@ -500,6 +644,19 @@ async function loadSamples() {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
   });
 
+  $('todoBtn').addEventListener('click', () => {
+    const panel = $('todoPanel');
+    if (panel.hidden) { renderTodos(); panel.hidden = false; } else { panel.hidden = true; }
+  });
+  // 点面板和按钮以外的地方收起待办
+  document.addEventListener('click', (e) => {
+    const panel = $('todoPanel');
+    if (panel.hidden) return;
+    if (e.target.closest('#todoPanel') || e.target.closest('#todoBtn')) return;
+    panel.hidden = true;
+  });
+
+  renderTodos();
   loadHealth();
   loadSamples();
   restore();

@@ -1,7 +1,9 @@
 # scm_agent —— 智能体核心
 
-这个模块是整套系统的核心：LangGraph 主图 + 10 条业务子图、RAG 检索、业务系统集成
-（端口／适配器）、政策引擎与幂等、FastAPI 服务与坐席工作台页面。
+这个模块是整套系统的核心：LangGraph 主图 + 5 条业务子图（智能问答 / 采购申请 /
+收货验收 / 库存管理 / 供应商管理）+ 1 条兜底子图，RAG 双通道检索（制度文档 ×
+物料-供应商-仓库图谱）、业务系统集成（端口／适配器）、策略引擎与幂等、
+FastAPI 服务与演示工作台页面。
 
 **只想看效果的话，不用从这个模块入手** —— 仓库根目录的 `quickstart.py` 离线就能
 跑通全部链路：
@@ -19,13 +21,13 @@ uv run --project scm_agent python quickstart.py
 
 启动后：
 
-* 坐席工作台：<http://127.0.0.1:2024/scm/workbench/>（账号取 `.env` 的 `DEMO_USER_*`）
+* 演示工作台：<http://127.0.0.1:2024/scm/workbench/>（账号取 `.env` 的 `DEMO_USER_*`）
 * LangGraph 平台接口：`:2024`（`/ok` 可直接探活）
 
 > `run_scm_agent` 里刻意用 `python -m langgraph_cli dev` 而不是 `uv run langgraph dev` ——
 > 后者在 Windows/Git-Bash 下会撞 uv 的 trampoline 报 "failed to canonicalize script path"。
 
-不用浏览器也能验收 SSE 与 HITL 全流程（输入刻意用 ASCII 菜单 id，绕开终端编码差异）：
+不用浏览器也能验收 SSE 与 HITL 全流程：
 
 ```bash
 cd scm_agent && set -a && . ./.env && set +a    # 取 DEMO_USER_*（未配置时用内置默认值）
@@ -34,35 +36,44 @@ TOKEN=$(curl -s -X POST localhost:2024/scm/get_token -H 'Content-Type: applicati
   -d "{\"user_id\":\"$DEMO_USER_ID\",\"password\":\"$DEMO_USER_PASSWORD\"}" | \
   python -c "import sys,json;print(json.load(sys.stdin)['token'])")
 
-# ① 发起：菜单 id 命中枚举（不调模型）直达标签链；打完 progress 停在 interrupt
+# ① 菜单 id 直达（不调模型；入参刻意用 ASCII，绕开终端编码差异）
 curl -sN -X POST localhost:2024/scm/chat/stream -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"task_input":"tag_suggestion"}'
-# -> event: open / progress ×N / interrupt（审批卡片里带 thread_id）
+  -H 'Content-Type: application/json' -d '{"task_input":"inventory_query"}'
+# -> event: open / progress ×N / done（该链路不需要人工确认）
 
-# ② 审批：decision 取 ok | discard | recreate，必须回传同一个 thread_id
+# ② HITL：这一条要的是自然语言（要素提取从原文里抽），所以入参是中文 ——
+#    控制台得能过 UTF-8（Git Bash 或 PYTHONUTF8=1），否则请直接在工作台上点。
+curl -sN -X POST localhost:2024/scm/chat/stream -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json; charset=utf-8' \
+  -d '{"task_input":"给 WH01 申购 8000kg 冷轧钢板 1.2mm，指定 S012，产线急用"}'
+# -> open / progress ×N / interrupt（审批卡片里带 thread_id 与方案要素）/ todo
+
+# ③ 审批：decision 取 ok | discard | recreate，必须回传同一个 thread_id；
+#    recreate 时可选 patch —— 采购只认 supplier_code / qty / target_warehouse
 curl -sN -X POST localhost:2024/scm/chat/resume -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"thread_id":"<上一步的>","decision":"ok"}'
-# -> progress ×N / done（task_result_code=0）
+  -H 'Content-Type: application/json' \
+  -d '{"thread_id":"<上一步的>","decision":"recreate","patch":{"supplier_code":"S001"}}'
+# -> progress ×N / done（task_result_code=0，改判后免审批直接下单）
 ```
 
-可用的菜单 id 就是 `scm_node.py` 的 `NodeName`：`product_qa` / `order_query` /
-`after_sale` / `weekly_report` / `tag_suggestion` / `profile_suggestion` /
-`schedule_suggestion` / `chat_suggestion` / `kf_chat_suggestion`。
+可用的菜单 id 就是 `scm_node.py` 的 `NodeName`：`material_qa` / `purchase_request` /
+`goods_receipt` / `inventory_query` / `supplier_query` / `no_clear_intention`。
 事件与字段的完整说明在各路由的 docstring（`src/webapp/chat_routes.py`）。
 
 ## src 目录说明
 
 | 目录 | 内容 |
 |---|---|
-| `graphs/scm_graph/` | 主图（统一调度）与 10 个业务子图，每个子图是 `graph / state / node` 三件套 |
-| `rag/` | 解析 → 分块 → 向量化 → 混合召回 → 重排 → 置信度 → 出处；默认纯 Python，`VECTOR_STORE=milvus` 可切向量库 |
+| `graphs/scm_graph/` | 主图（统一调度）与 6 个子图，每个子图是 `graph / state / node` 三件套 |
+| `kg/` | 物料-供应商-仓库图谱：schema / 内存实现（可切 neo4j）/ 多跳查询 / 实体链接，与 `rag/` 平行的一层 |
+| `rag/` | 解析 → 分块 → 向量化 → 混合召回（文档 × 图谱第三路）→ 重排 → 置信度 → 出处；默认纯 Python，`VECTOR_STORE=milvus` 可切向量库 |
 | `llm/` | 提示词与模型调用；`llm_setting.py` 是真实／离线模型的唯一切换点，`offline/` 是离线合成器 |
-| `integrations/` | `ports.py` 定义业务接口，`mock/` 与 `http/` 分别实现；`normalize.py` 字段归一、`policy.py` 政策引擎、`idempotency.py` 幂等、`mcp/` 工具网关桥 |
-| `webapp/` | FastAPI：SSE 对话接口、JWT、坐席工作台静态页（`static/`） |
+| `integrations/` | `ports.py` 定义业务接口，`mock/` 与 `http/` 分别实现；`resilience.py` 熔断、`normalize.py` 字段归一、`policy.py` 策略引擎、`idempotency.py` 幂等、`mcp/` 工具网关桥 |
+| `webapp/` | FastAPI：SSE 对话接口、JWT、演示工作台静态页（`static/`） |
 | `demo/` | 场景表与进程内 runner —— 与 webapp 共用同一套进度事件 |
 | `store/` | Store 访问（`store_provider.py` 提供脱离平台运行时可用进程内实现） |
 | `models/` | 跨检查点的 pydantic 模型（状态里不放 dataclass） |
-| `observability/` | 进度事件（`progress.py`）与 Langfuse 埋点 |
+| `observability/` | 进度事件（`progress.py`）、降级分级（`degrade.py`）与 Langfuse 埋点 |
 | `data/` | `seed/` 虚构业务数据、`knowledge/` RAG 语料、`index/` 生成的检索索引 |
 
 架构与模块间契约见 [`docs/architecture.md`](../docs/architecture.md)；
@@ -78,7 +89,7 @@ curl -sN -X POST localhost:2024/scm/chat/resume -H "Authorization: Bearer $TOKEN
 
 服务模式下还有一条硬约束：**别裸调 `load_dotenv()`，也别写 `Path(__file__).resolve()`**。
 `langgraph dev` 的 blockbuster 守卫会拦 `os.getcwd()`（只在事件循环线程里生效），
-而这两个写法内部都在调它 —— 模块只要是「首次请求才被 import」的（坐席工作台首次
+而这两个写法内部都在调它 —— 模块只要是「首次请求才被 import」的（演示工作台首次
 请求才建图），整条 SSE 请求就直接 500。所以：`.env` 统一走 `utils/env_loader.py`，
 模块级路径常量统一写词法的 `Path(__file__).parents[n]`。实测放行/拦截清单见
 `utils/env_loader.py` 的模块说明。

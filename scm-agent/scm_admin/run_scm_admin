@@ -1,13 +1,14 @@
 #!/bin/bash
-# 启动客服运营后台（Flask，默认 :5000）。
+# 启动审批看板（Flask，默认 :5000，单页只读）。
 #
-# ⚠️ 它读的是 LangGraph 平台里的 Store，所以**必须先起平台服务**：
+# ⚠️ 它读的是 LangGraph 平台 Store 里的审批记录，所以**必须先起平台服务**：
 #     scm_agent/run_scm_agent        （langgraph dev，:2024）
-# 只想看效果的话不用跑这个：根目录 `python quickstart.py` 离线就能跑通全部链路。
-echo "scm-admin 启动中……"
+# 而且要先在工作台上跑一笔需要审批的场景，看板上才有内容。
+# 只想看智能体效果的话不用跑这个：根目录 `python quickstart.py` 离线就能跑通全部链路。
+echo "scm-admin（审批看板）启动中……"
 
 uv sync
 
 # PYTHONUTF8=1：日志与模板统一按 UTF-8 读写，不受 Windows 控制台 GBK 影响。
 PYTHONUTF8=1 nohup uv run scm_admin_app.py >> scm_admin.log 2>&1 &
-echo "已在后台启动，日志：scm_admin.log；端口 5000"
+echo "已在后台启动，日志：scm_admin.log；端口 5000（http://127.0.0.1:5000）"

@@ -281,7 +281,8 @@ class PurchasePlan(ScmBaseModel):
 
     `plan_id` 由 `biz_id`（确定性 PR 单号）uuid5 生成，不随调用次数变化 ——
     重放、重试、多轮审批都指向同一个 plan_id，下游据此判断「这单我是不是已经下过了」。
-    与售后链路是同一个幂等锚点设计，只是业务单号换成了采购申请号。
+    收货复核链路（`ReceiptPlan`）用的是同一套锚点设计，只是业务单号换成了
+    收货登记号（`RC` 开头）。
     '''
 
     plan_id: str = Field(default="", description="方案 ID，由 biz_id 确定性生成（uuid5）")
@@ -431,8 +432,8 @@ class MaterialQACitation(ScmBaseModel):
 class MaterialQA(ScmBaseModel):
     ''' 智能问答结果（制度文档 + 图谱关系双通道）
 
-    与 `ProductQA` 同一套结构：跨进程边界的数据必须是 pydantic 模型，
-    两个模型之间用 `from_rag_answer()` 单向转换，字段一一对应；
+    与进程内的 `rag.types.RagAnswer` 同一套结构：跨进程边界的数据必须是
+    pydantic 模型，两者之间用 `from_rag_answer()` 单向转换，字段一一对应；
     额外带上 `channel`（DOC / RELATION / BOTH），方便演示时解释这题走的哪条通道。
     '''
 

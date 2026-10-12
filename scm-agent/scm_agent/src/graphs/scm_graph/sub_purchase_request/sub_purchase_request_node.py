@@ -3,7 +3,7 @@
 
 链路：欢迎 → 要素提取 + 取价 + 策略判定 →(命中需审条款)→ 人工审批 →(可改判重报)→ 执行。
 
-HITL × 幂等的四条不变量（与售后链路同源，这条链路逐条复用）
+HITL × 幂等的四条不变量（与收货复核链路同源，这条链路逐条复用）
 ------------------------------------------------------------
   ① **`interrupt()` 所在节点在 resume 时会从第一行重放**，所以中断之前不得有
      任何副作用。`approval_node` 中断前全程只读状态，下单只有一个落点 `execute_node`。
@@ -417,6 +417,7 @@ def approval_node(state: SubPurchaseRequestState, config: RunnableConfig):
         thread_id=thread_id, plan_id=plan.plan_id,
         decision="approved" if approved else "rejected",
         operator=operator, revision=plan.revision,
+        biz_id=plan.biz_id, kind="purchase",
     )
     if not is_first:
         emit("idempotent_replay", detail=f"审批记录已存在，跳过重复写入（{plan.plan_id}）")
@@ -459,6 +460,7 @@ def _recreate_node(state: SubPurchaseRequestState, config: RunnableConfig,
     guard.record_approval(
         thread_id=thread_id, plan_id=plan.plan_id,
         decision="recreated", operator=operator, revision=plan.revision,
+        biz_id=plan.biz_id, kind="purchase",
     )
 
     materials = state.get(SubPurchaseRequestStateField.MATERIALS) or []
@@ -606,7 +608,7 @@ def _apply_recreate_patch(plan: PurchasePlan, patch: Any) -> Tuple[Dict[str, Any
 def _parse_decision(decision: Any) -> Tuple[str, str, Dict[str, Any]]:
     """审批入参归一：把各调用方的写法收敛成一个动作 + 署名 + 可选 patch。
 
-    四种形态都要认（与售后链路同一份协议，不另立一套）：
+    四种形态都要认（与收货复核链路同一份协议，不另立一套）：
       * `{"confirmed": "ok"|"discard"|"recreate", "patch": {...}}` —— 图内 HITL 协议
         （demo runner 与 SSE 恢复用这个）
       * `{"decision": "recreate", "patch": {...}}` —— 后台审批接口的结构化写法

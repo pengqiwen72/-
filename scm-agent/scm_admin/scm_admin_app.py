@@ -1,35 +1,48 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-客服运营后台 Flask 应用。
+审批看板（Flask，默认 :5000）。
 
-以查询展示为主：员工、客户、标签体系、会话记录、订单。
-数据不在本地库里，全部来自 LangGraph 平台的 Store（经 `scm_store_api` 读）。
+**单页只读**：一页审批明细 + 顶部的一次通过率。没有登录、没有写接口 ——
+审批动作发生在演示工作台（interrupt → 人工决策那一步），这里只是把
+「谁批的、第几轮批的、有没有返工」摊开看。
 
-因此它需要平台服务在跑（`scm_agent/run_scm_agent` 起的 langgraph dev），
-**不属于「零配置离线演示」那一套** —— 离线那套看根目录的 quickstart.py。
+数据不在本地库里，全部来自平台服务 Store 的 `("approval",)` 命名空间
+（由 `integrations/idempotency.py::record_approval` 写入）。因此它需要
+平台服务在跑：
+
+    scm_agent/run_scm_agent        # langgraph dev，:2024
+    scm_admin/run_scm_admin        # 本看板，:5000
+
+只想看智能体本身的话不用起这个：根目录 `quickstart.py` 离线就能跑通全部链路。
 """
 
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
-import json
+from __future__ import annotations
+
 import os
-import secrets
+from typing import Any, Dict, List, Optional
+
 from dotenv import load_dotenv
-from functools import wraps
-from scm_store_api.scm_store_api import create_scm_store_api, ScmStoreAPI
+from flask import Flask, jsonify, render_template
+
+from scm_store_api.scm_store_api import ScmStoreAPI, create_scm_store_api
 
 load_dotenv()
 
 app = Flask(__name__)
 
-_secret = os.getenv('FLASK_SECRET_KEY')
-if not _secret:
-    # 不内置一把「所有部署共用」的签名密钥。不配就每次启动随机生成，
-    # 副作用是重启后所有人的登录态失效 —— 这个副作用刻意留着，
-    # 它会让人尽快去配一个真密钥，而不是把不安全的默认值带上线。
-    _secret = secrets.token_hex(32)
-    app.logger.warning('未配置 FLASK_SECRET_KEY，已生成进程级随机密钥；重启后需要重新登录')
-app.secret_key = _secret
+#: 结论的显示文案（与 `sub_purchase_request_node.py::_ACTION_TEXT` 同一套叫法）
+DECISION_TEXT = {
+    "approved": "通过",
+    "rejected": "驳回",
+    "recreated": "改判重报",
+}
+
+#: 链路名 → 显示文案（`record_approval(kind=...)` 写进来的那个值）
+KIND_TEXT = {
+    "purchase": "采购申请",
+    "receipt": "收货复核",
+}
 
 
 class _LazyStoreClient:
@@ -37,25 +50,25 @@ class _LazyStoreClient:
 
     ⚠️ 不能在模块导入时就连：`create_scm_store_api` 一上来就要
     SCM_SERVER_URL / SCM_USER_ID / SCM_PASSWORD，缺一个就抛 ValueError ——
-    那样连「打开登录页看一眼」都做不到，而且报错完全看不出是配置问题。
+    那样连「打开页面看一眼」都做不到，而且报错完全看不出是配置问题。
     现在连接推迟到第一个请求，缺哪些变量直接写进错误信息里。
     """
 
     def __init__(self):
-        self._client: ScmStoreAPI | None = None
+        self._client: Optional[ScmStoreAPI] = None
 
     def _connect(self) -> ScmStoreAPI:
         if self._client is None:
-            missing = [n for n in ('SCM_SERVER_URL', 'SCM_USER_ID', 'SCM_PASSWORD') if not os.getenv(n)]
+            missing = [n for n in ("SCM_SERVER_URL", "SCM_USER_ID", "SCM_PASSWORD") if not os.getenv(n)]
             if missing:
                 raise RuntimeError(
                     f'缺少配置 {", ".join(missing)}：请复制 .env.example 为 .env 并填写，'
-                    '同时确认平台服务（run_scm_agent）已启动'
+                    "同时确认平台服务（run_scm_agent）已启动"
                 )
             self._client = create_scm_store_api(
-                url=os.getenv('SCM_SERVER_URL'),
-                user_id=os.getenv('SCM_USER_ID'),
-                password=os.getenv('SCM_PASSWORD'),
+                url=os.getenv("SCM_SERVER_URL"),
+                user_id=os.getenv("SCM_USER_ID"),
+                password=os.getenv("SCM_PASSWORD"),
             )
         return self._client
 
@@ -63,219 +76,87 @@ class _LazyStoreClient:
         return getattr(self._connect(), name)
 
 
-# 各路由照旧按 `client.xxx()` 调用，连接与否由这个代理决定
 client = _LazyStoreClient()
 
-def login_required(f):
-    """登录装饰器"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'logged_in' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
 
-@app.route('/')
-def index():
-    """首页重定向到员工列表"""
-    return redirect(url_for('employees'))
+# ==================== 聚合口径 ====================
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    """登录页面"""
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        
-        if username == os.getenv('ADMIN_USER_ID') and password == os.getenv('ADMIN_PASSWORD'):
-            session['logged_in'] = True
-            session['username'] = username
-            return redirect(url_for('employees'))
-        else:
-            return render_template('login.html', error='用户名或密码错误')
-    
-    return render_template('login.html')
+def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """把审批记录聚合成看板要的两块：明细行 + 顶部统计。
 
-@app.route('/logout')
-def logout():
-    """登出"""
-    session.clear()
-    return redirect(url_for('login'))
+    口径（页脚会把这几行原样写给看的人，否则「一次通过率」很容易被误读）：
 
-@app.route('/employees')
-@login_required
-def employees():
-    """员工列表页"""
-    return render_template('employees.html')
+    * **一次通过** = 第 0 轮（`revision == 0`）的结论就是 approved。
+      改判重报（recreated）不算一次通过 —— 那一单是被退回来改了才继续走的。
+    * **一次通过率** = 一次通过数 / 申请总数，两边都只数第 0 轮
+      （一轮申请算一次，第二轮不重复计数）。
+    * **返工次数** = 同一申请在 r1 及以后出现的审批记录条数。
 
-@app.route('/employee_customers/<user_id>')
-@login_required
-def employee_customers(user_id):
-    """员工客户列表页"""
-    return render_template('employee_customers.html', user_id=user_id)
+    明细按时间倒序（最近的在最上面），每行补上显示用的文案与两个派生列。
+    """
+    rework: Dict[str, int] = {}
+    for item in records:
+        if int(item.get("revision") or 0) > 0:
+            plan_key = f"{item.get('thread_id')}:{item.get('plan_id')}"
+            rework[plan_key] = rework.get(plan_key, 0) + 1
 
-@app.route('/tags')
-@login_required
-def tags():
-    """标签体系页"""
-    return render_template('tags.html')
-
-@app.route('/customer_detail/<follow_user_id>/<external_id>')
-@login_required
-def customer_detail(follow_user_id, external_id):
-    """客户详情页"""
-    return render_template('customer_detail.html', follow_user_id=follow_user_id, external_id=external_id)
-
-@app.route('/chat_records/<user_id>/<external_id>')
-@login_required
-def chat_records(user_id, external_id):
-    """对话记录页"""
-    return render_template('chat_records.html', user_id=user_id, external_id=external_id)
-
-@app.route('/customer_orders/<union_id>')
-@login_required
-def customer_orders(union_id):
-    """客户订单列表页"""
-    return render_template('customer_orders.html', union_id=union_id)
-
-@app.route('/kf_records/<external_id>')
-@login_required
-def kf_records(external_id):
-    """客服记录页"""
-    return render_template('kf_records.html', external_id=external_id)
-
-# ==================== API 路由 ====================
-
-@app.route('/api/employees', methods=['GET'])
-@login_required
-def api_employees():
-    """获取员工列表API"""
-    try:
-        employees = client.list_all_employee()
-        return jsonify({"success": True, "data": employees})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-
-@app.route('/api/employees', methods=['POST'])
-@login_required
-def api_create_employee():
-    """创建员工API"""
-    try:
-        data = request.get_json()
-        user_id = data.get('user_id')
-        name = data.get('name')
-        
-        if not user_id or not name:
-            return jsonify({"success": False, "error": "用户ID和姓名不能为空"})
-        
-        client.upsert_employee(user_id, name)
-        return jsonify({"success": True, "message": "员工创建成功"})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-
-@app.route('/api/employees/<user_id>', methods=['DELETE'])
-@login_required
-def api_delete_employee(user_id):
-    """删除员工API"""
-    try:
-        ## 暂不允许删除员工
-        ## client.delete_employee(user_id)
-        return jsonify({"success": True, "message": "暂不允许删除员工"})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-
-@app.route('/api/employee_customers/<user_id>', methods=['GET'])
-@login_required
-def api_employee_customers(user_id):
-    """获取员工客户列表API"""
-    try:
-        customers = client.list_external_user_by_follow_user_id(user_id)
-        return jsonify({"success": True, "data": customers})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-
-@app.route('/api/tags', methods=['GET'])
-@login_required
-def api_tags():
-    """获取标签体系API"""
-    try:
-        tags = client.list_all_tags_setting()
-        return jsonify({"success": True, "data": tags})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-
-@app.route('/api/customer_detail/<follow_user_id>/<external_id>', methods=['GET'])
-@login_required
-def api_customer_detail(follow_user_id, external_id):
-    """获取客户详情API"""
-    try:
-        # 获取客户基本信息
-        customer = client.get_external_user_by_external_id(external_id, follow_user_id)
-        if not customer:
-            return jsonify({"success": False, "error": "客户不存在"})
-        
-        # 获取客户标签信息
-        customer_tags = client.get_external_user_tag_by_external_id(external_id, follow_user_id)
-
-        # 获取客户Profile信息
-        profile = client.get_profile_by_external_id(external_id, follow_user_id)
-        
-        return jsonify({
-            "success": True,
-            "data": {
-                "customer": customer,
-                "tags": customer_tags,
-                "profile": profile
-            }
+    rows: List[Dict[str, Any]] = []
+    first_round = 0
+    first_pass = 0
+    for item in records:
+        revision = int(item.get("revision") or 0)
+        decision = str(item.get("decision") or "")
+        plan_key = f"{item.get('thread_id')}:{item.get('plan_id')}"
+        is_first_pass = revision == 0 and decision == "approved"
+        if revision == 0:
+            first_round += 1
+            first_pass += 1 if is_first_pass else 0
+        rows.append({
+            **item,
+            "revision": revision,
+            "round_text": "第 %d 轮" % (revision + 1),
+            "decision_text": DECISION_TEXT.get(decision, decision or "—"),
+            "kind_text": KIND_TEXT.get(str(item.get("kind") or ""), str(item.get("kind") or "—")),
+            "is_first_pass": is_first_pass,
+            "rework": rework.get(plan_key, 0),
         })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
 
-@app.route('/api/chat_records/<user_id>/<external_id>', methods=['GET'])
-@login_required
-def api_chat_records(user_id, external_id):
-    """获取对话记录API"""
+    rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    stats = {
+        "plans": first_round,
+        "first_pass": first_pass,
+        "first_pass_rate": round(first_pass / first_round, 4) if first_round else None,
+        "reworked_plans": len(rework),
+    }
+    return {"records": rows, "stats": stats}
+
+
+# ==================== 页面与接口 ====================
+
+@app.route("/")
+def index():
+    """看板页（单页）。数据由页面里的 fetch 拉 `/api/approvals`。"""
+    return render_template("approvals.html")
+
+
+@app.route("/api/approvals", methods=["GET"])
+def api_approvals():
+    """全部审批记录 + 顶部统计。
+
+    读失败（平台没起、配置缺失、令牌不对）一律走同一条错误路径：把原因
+    原样回给页面 —— 这个看板最常见的故障就是「平台服务没起」，错误信息里
+    直接写出来，比让人去看控制台日志快得多。
+    """
     try:
-        # 获取查询参数，如果没有提供则使用30天前作为默认值
-        after_yyyy_mm_dd = request.args.get('after_yyyy_mm_dd')
-        if not after_yyyy_mm_dd:
-            from datetime import datetime, timedelta
-            # 默认获取30天前的消息
-            thirty_days_ago = datetime.now() - timedelta(days=30)
-            after_yyyy_mm_dd = thirty_days_ago.strftime('%Y%m%d')
-        
-        messages = client.list_last_wxqy_msg(external_id, user_id, after_yyyy_mm_dd)
-        return jsonify({"success": True, "data": messages})
+        records = client.list_approvals()
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        app.logger.warning(f"读取审批记录失败：{e}")
+        return jsonify({"success": False, "error": str(e)}), 200
 
-@app.route('/api/customer_orders/<union_id>', methods=['GET'])
-@login_required
-def api_customer_orders(union_id):
-    """获取客户订单API"""
-    try:
-        orders = client.list_wxxd_order_by_union_id(union_id)
-        return jsonify({"success": True, "data": orders})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    return jsonify({"success": True, "data": summarize(records)})
 
-@app.route('/api/kf_records/<external_id>', methods=['GET'])
-@login_required
-def api_kf_records(external_id):
-    """获取客服记录API"""
-    try:
-        # 获取查询参数，如果没有提供则使用30天前作为默认值
-        after_yyyy_mm_dd = request.args.get('after_yyyy_mm_dd')
-        if not after_yyyy_mm_dd:
-            from datetime import datetime, timedelta
-            # 默认获取30天前的消息
-            thirty_days_ago = datetime.now() - timedelta(days=30)
-            after_yyyy_mm_dd = thirty_days_ago.strftime('%Y%m%d')
-        
-        messages = client.list_last_wxkf_msg(external_id, after_yyyy_mm_dd)
-        return jsonify({"success": True, "data": messages})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
 
-if __name__ == '__main__':
-    app.run(debug=os.getenv('FLASK_DEBUG', 'False') == 'True', host='0.0.0.0', port=5000) 
+if __name__ == "__main__":
+    port = int(os.getenv("SCM_ADMIN_PORT", "5000") or 5000)
+    app.logger.info(f"审批看板启动：http://127.0.0.1:{port}（单页只读）")
+    app.run(host="0.0.0.0", port=port, debug=False)

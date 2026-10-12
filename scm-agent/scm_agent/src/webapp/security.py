@@ -1,12 +1,12 @@
 """
-坐席工作台的登录与鉴权：签发 / 校验 JWT。
+演示工作台的登录与鉴权：签发 / 校验 JWT。
 
 和 `auth/auth.py` 的分工
 -----------------------
 `auth/auth.py` 是**平台级**鉴权：`langgraph dev` 用它校验调用方身份，
 配置在 `langgraph.json` 的 `auth` 段，管的是「谁能调这个图服务」。
 
-这里是**应用级**登录：坐席在工作台页面输入账号密码，换一个 JWT，
+这里是**应用级**登录：操作员在工作台页面输入账号密码，换一个 JWT，
 后续每个 `/scm/*` 请求带着它。两者不冲突，也不需要共享同一份实现 ——
 平台鉴权发生在网关层，页面鉴权发生在业务层。
 
@@ -72,13 +72,13 @@ def expire_minutes() -> int:
 def demo_credentials() -> tuple[str, str]:
     """内置演示账号。返回 (user_id, password)。"""
     return (
-        (os.getenv("DEMO_USER_ID") or "CS001").strip(),
+        (os.getenv("DEMO_USER_ID") or "OP001").strip(),
         (os.getenv("DEMO_USER_PASSWORD") or "scm-demo-2026").strip(),
     )
 
 
 def create_access_token(user_id: str, external_id: str = "") -> str:
-    """签发坐席令牌。"""
+    """签发工作台令牌。"""
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
@@ -91,7 +91,7 @@ def create_access_token(user_id: str, external_id: str = "") -> str:
 
 @dataclass(frozen=True)
 class AgentIdentity:
-    """当前登录的坐席。"""
+    """当前登录的操作员。"""
 
     user_id: str
     external_id: str = ""
@@ -113,7 +113,7 @@ def decode_token(token: str) -> AgentIdentity:
 
 
 async def require_agent(authorization: Optional[str] = Header(default=None)) -> AgentIdentity:
-    """FastAPI 依赖：要求请求方是已登录坐席。
+    """FastAPI 依赖：要求请求方是已登录的操作员。
 
     `Authorization` 用 Header 自动注入，OpenAPI 里也就长出了鉴权入口，
     不然调接口的人只能靠翻文档才知道要带 token。

@@ -42,7 +42,7 @@ async def verify_token(token: str) -> bool:
 
 
 async def _identity_from_jwt(token: str) -> str | None:
-    """把 Bearer 当成坐席 JWT 试解一次（密钥与 `/scm/*` 接口同一套）。
+    """把 Bearer 当成工作台 JWT 试解一次（密钥与 `/scm/*` 接口同一套）。
 
     解析失败只说明「这不是一个有效的 JWT」，返回 None 交给静态令牌那条路 ——
     **不能在这里直接 401**：`DEMO_USER_TOKEN` 本来就不是 JWT，先判 JWT 再
@@ -62,7 +62,7 @@ async def authenticate(request: Request, authorization: str|None) -> str:
 
     接受两种 Bearer：
 
-    * **坐席 JWT** —— 工作台登录换来的那个，与 `/scm/*` 接口共用一套密钥。
+    * **工作台 JWT** —— 登录页换来的那个，与 `/scm/*` 接口共用一套密钥。
       这样「页面登录 → 调平台接口」是一条链路，不用再单独配一个平台令牌。
     * **静态 `DEMO_USER_TOKEN`** —— 给 `langgraph dev` / Studio 用：直接起平台
       调试时不想先走一遍登录，留一个固定令牌最省事。
@@ -84,10 +84,10 @@ async def authenticate(request: Request, authorization: str|None) -> str:
 
     identity = await _identity_from_jwt(token)
     if identity:
-        logger.info("authenticate ok（坐席 JWT）, identity=%s", identity)
+        logger.info("authenticate ok（工作台 JWT）, identity=%s", identity)
         return identity
 
-    # ⚠️ 这里曾经硬编码返回 "CS001"，导致任何合法 token 都被当成同一个人，
+    # ⚠️ 这里曾经硬编码返回一个固定的 user_id，导致任何合法 token 都被当成同一个人，
     #    下游按 user_id 取数据全部串号。身份必须从 token 映射里取。
     if token in VALID_TOKENS:
         identity = VALID_TOKENS[token].get("user_id") or ""

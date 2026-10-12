@@ -302,7 +302,8 @@ class IdempotencyGuard:
 
     def record_approval(self, *, thread_id: str, plan_id: str,
                         decision: str, operator: str = "",
-                        revision: int = 0) -> bool:
+                        revision: int = 0, biz_id: str = "",
+                        kind: str = "") -> bool:
         """记录人工审批结论。**同一轮内首次写入生效**，之后的重复写入被忽略。
 
         HITL 恢复时审批节点本身也在重放，所以它必须和执行节点一样是幂等的：
@@ -311,6 +312,10 @@ class IdempotencyGuard:
 
         `decision` 取值：approved / rejected / recreated（recreate 是「改判重报」，
         它同样是一轮审批的结论 —— 首次通过率正是靠它和 approved 的占比算的）。
+
+        `biz_id` / `kind` 是给审批看板显示用的（业务单号与链路名）：只靠 uuid 的
+        方案号，看板上认不出这是哪一单、是采购还是收货。它们**不参与任何判定**，
+        缺省为空（缺了看板显示「—」，不影响任何链路行为）。
         """
         key = self.approval_key(thread_id, plan_id, revision)
         if self.get_approval(key) is not None:
@@ -321,6 +326,8 @@ class IdempotencyGuard:
             self.store.put(APPROVAL_NAMESPACE, key, {
                 "thread_id": thread_id,
                 "plan_id": plan_id,
+                "biz_id": biz_id,
+                "kind": kind,
                 "decision": decision,
                 "operator": operator,
                 "revision": revision,

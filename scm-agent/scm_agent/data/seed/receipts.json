@@ -2,7 +2,7 @@
   "_comment": [
     "收货单（历史记录）。po_no 必须能在 purchase_orders.json 里找到——_verify 会拦下悬空引用。",
     "defect_rate 在这里不写死，由 qty_received / qty_defect 推出（models/scm_models.py::ReceiptPlan.compute_defect_rate）。",
-    "剧情锚点：RC20260922001 是「不良率 15% 整批退货」的历史先例，客服/质检话术可以引用它；",
+    "剧情锚点：RC20260922001 是「不良率 15% 整批退货」的历史先例，质检话术可以引用它；",
     "两个在途 PO（PO20260928001 / PO20260928002）刻意不预置收货单——它们是演示时现场登记的。"
   ],
   "receipts": [

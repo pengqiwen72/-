@@ -1,273 +1,80 @@
-from typing import List, Dict, Any, Optional, Union
-from langgraph_sdk import get_sync_client
-from datetime import datetime
-from pprint import pprint
-import os
+"""
+审批看板的 Store 客户端：从 LangGraph 平台的 Store 里读审批记录。
+
+数据**不在本地库里**：审批记录由业务链路写在平台 Store 的
+`("approval",)` 命名空间（见 `scm_agent/src/integrations/idempotency.py`
+的 `record_approval`）。所以看板必须先起平台服务：
+
+    scm_agent/run_scm_agent        # langgraph dev，:2024
+
+这个文件里没有任何写接口 —— 看板是给人看结果的，不是给人改数据的。
+审批本身发生在演示工作台（interrupt → 人工决策的那一步），看板是事后审计
+的视角：谁批的、第几轮批的、有没有返工。
+
+关于令牌：平台服务的每个接口都要 Bearer，Store 也不例外，所以这里仍然要
+走一遍 `/scm/get_token`。用的是演示账号（`SCM_USER_ID`），不是另一套
+「管理员账号」—— 看板不需要额外权限模型，它读的本来就是演示数据。
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
 from dotenv import load_dotenv
+from langgraph_sdk import get_sync_client
 import requests
 
 load_dotenv()
 
+#: 与 `scm_agent/src/integrations/idempotency.py::APPROVAL_NAMESPACE` 保持同一口径。
+#: 平台 Store 的命名空间是字符串列表，这里写单元素列表。
+APPROVAL_NAMESPACE = ["approval"]
+
+
 class ScmStoreAPI:
-    """
-    LangGraph Agent Store 客户端API
-    提供对员工信息、外部客户信息、全局标签定义、聊天消息、客户订单、客户标签等数据的操作接口
-    """
-    
+    """平台 Store 的只读客户端（当前只有审批记录一个入口）。"""
+
     def __init__(self, server_url: str, user_id: str, password: str):
-        """
-        初始化客户端
-        
-        Args:
-            server_url: langgraph server 地址
-            user_id: 用户ID
-            password: 用户密码
-        """
-        
         if not server_url or not user_id or not password:
             raise ValueError("server_url, user_id, password are required")
 
-        # 获取token和其他登录信息
-        response = requests.post(f"{server_url}/scm/get_token", json={"user_id": user_id, "password": password})
-        if response.status_code == 200:
-            token = response.json().get("token")
-        else:
-            raise ValueError("获取token失败")
-        
-        # 创建客户端连接
-        headers = {"Authorization": "Bearer " + token}
-        client = get_sync_client(url = server_url, headers = headers)
+        response = requests.post(
+            f"{server_url}/scm/get_token",
+            json={"user_id": user_id, "password": password},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            raise ValueError(
+                f"获取 token 失败（HTTP {response.status_code}）："
+                "确认平台服务已启动、SCM_USER_ID / SCM_PASSWORD 与 .env 一致"
+            )
+        token = response.json().get("token")
 
-        self.store = client.store
-    
-    # ==================== 员工信息 ====================
-    
-    def upsert_employee(self, user_id: str, name: str) -> None:
-        """插入或更新员工信息"""
-        namespace = ["employee"]
-        key = user_id
-        value = {
-            "user_id": user_id,
-            "name": name
-        }
-        self.store.put_item(namespace, key, value)
-    
-    def delete_employee(self, user_id: str) -> None:
-        """删除员工信息"""
-        namespace = ["employee"]
-        key = user_id
-        self.store.delete_item(namespace, key)
-    
-    def get_employee_by_user_id(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """根据user_id获取员工信息"""
-        namespace = ["employee"]
-        key = user_id
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value", {})
-        else:
-            return {}
-    
-    def list_all_employee(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """获取所有员工信息"""
-        namespace = ["employee"]
-        response = self.store.search_items(namespace, limit=limit)
-        return [item["value"] for item in response["items"]]
-    
-    # ==================== 外部客户信息 ====================
-    
-    
-    def get_external_user_by_external_id(self, external_id: str, follow_user_id: str) -> Optional[Dict[str, Any]]:
-        """根据external_id获取外部客户信息"""
-        namespace = ["external_user", follow_user_id]
-        key = external_id
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value", {})
-        else:
-            return {}
-    
-    def list_external_user_by_follow_user_id(self, follow_user_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """获取所有外部客户信息"""
-        namespace = ["external_user", follow_user_id]
-        response = self.store.search_items(namespace, limit=limit)
-        return [item["value"] for item in response["items"]]
-    
-    def get_external_user_by_union_id(self, union_id: str, follow_user_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """根据union_id获取外部客户信息列表"""
-        namespace = ["external_user", follow_user_id]
-        filter = {"union_id": union_id}
-        response = self.store.search_items(namespace, filter=filter, limit=limit)
+        self.store = get_sync_client(
+            url=server_url, headers={"Authorization": "Bearer " + token}
+        ).store
 
-        items = response["items"]
+    # ==================== 审批记录 ====================
 
-        if not items:
-            return None
-        if len(items) == 0:
-            return None
-        return items[0]["value"]
-    
-    def get_external_user_tag_by_external_id(self, external_id: str, follow_user_id: str) -> List[Dict[str, Any]]:
-        """根据external_id获取客户标签"""
-        namespace = ["external_user", follow_user_id]
-        key = external_id
-        result = self.store.get_item(namespace, key)
+    def list_approvals(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """读出 `("approval",)` 下的全部审批记录。
 
-        if result:
-            tag_ids = result.get("value", {}).get("tags", [])
-        else:
-            tag_ids = []
+        每条记录一行、**每轮审批各一行**（键是 `线程:方案[:r轮次]`，见
+        `approval_key`）—— 看板要算「一次通过率」，就必须看得到轮次，
+        所以这里不做去重，聚合交给上层。
 
-        tag_details = []
-        for tag_id in tag_ids:
-            tag = self.get_tags_setting_by_tag_id(tag_id)
-            if tag and tag.get("deleted") == False:
-                tag_details.append(tag)
-
-        return tag_details
-
-    # ==================== 客户profile ====================
-    
-    def get_profile_by_external_id(self, external_id: str, follow_user_id: str) -> Dict[str, Any]:
-        """根据external_id获取客户profile"""
-        namespace = ["external_user_profile", follow_user_id]
-        key = external_id
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value", {})
-        else:
-            return {}
-    
-    # ==================== 全局标签定义信息 ====================
-    
-    def get_tags_setting_by_tag_id(self, tag_id: str) -> Optional[Dict[str, Any]]:
-        """根据tag_id获取全局标签定义信息"""
-        namespace = ["tags_setting"]
-        key = tag_id
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value", {})
-        else:
-            return {}
-    
-    def list_all_tags_setting(self, limit: Optional[int] = None, 
-                            strategy_id: Optional[int] = None,
-                            group_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """获取所有全局标签定义信息，支持过滤条件"""
-        namespace = ["tags_setting"]
-        response = self.store.search_items(namespace, limit=limit)
-        results = [item["value"] for item in response["items"]]
-        
-        # 应用过滤条件
-        if strategy_id:
-            results = [item for item in results if item.get("strategy_id") == strategy_id]
-        if group_id:
-            results = [item for item in results if item.get("group_id") == group_id]
- 
-        results = [item for item in results if item.get("deleted") == False]
-        
-        return results
-    
-    # ==================== 聊天消息内容信息 ====================
-    
-    def get_wxqy_msg_by_msg_id(self, msg_id: str, external_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-        """根据msg_id获取聊天消息内容信息"""
-        from_to_sorted_key = "".join(sorted([external_id, user_id]))
-        namespace = ["wxqy_msg", from_to_sorted_key]
-        key = msg_id
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value", {})
-        else:
-            return {}
-    
-    def list_last_wxqy_msg(self, external_id: str, user_id: str, after_yyyy_mm_dd: str, limit: Optional[int] = 100) -> List[Dict[str, Any]]:
-        """获取所有聊天消息内容信息，支持过滤条件"""
-
-        from_to_sorted_key = "".join(sorted([external_id, user_id]))
-        namespace = ["wxqy_msg", from_to_sorted_key]
-        filter = {"YYYYMMDD": {"$gte": after_yyyy_mm_dd}}
-        response = self.store.search_items(namespace, filter=filter, limit=limit)
-        results = [item["value"] for item in response["items"]]
-        return results
-        
-    # ==================== 微信客服信息 ====================
+        没有配 `filter`：这个命名空间下只有审批记录，全量读回即可。
+        """
+        response = self.store.search_items(APPROVAL_NAMESPACE, limit=limit)
+        items = response["items"] if isinstance(response, dict) else response
+        records: List[Dict[str, Any]] = []
+        for item in items:
+            item = item or {}
+            value = dict(item.get("value") or {})
+            value["key"] = item.get("key", "")
+            records.append(value)
+        return records
 
 
-    def get_wxkf_msg_by_msg_id(self, msg_id: str, external_id: str) -> Optional[Dict[str, Any]]:
-        """根据msg_id获取微信客服信息"""
-        namespace = ["wxkf_msg", external_id]
-        key = msg_id
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value")
-        else:
-            return {}
-    
-    def list_last_wxkf_msg(self, external_id: str, after_yyyy_mm_dd: str, limit: Optional[int] = 100) -> List[Dict[str, Any]]:
-        """获取所有微信客服信息，支持过滤条件"""
-
-        namespace = ["wxkf_msg", external_id]
-        filter = {"YYYYMMDD": {"$gte": after_yyyy_mm_dd}}
-        response = self.store.search_items(namespace, filter=filter, limit=limit)
-        results = [item["value"] for item in response["items"]]
-        return results
-    # ==================== 客户订单信息 ====================
-    
-    
-    def get_wxxd_order_by_order_id(self, union_id: str, order_id: str) -> Optional[Dict[str, Any]]:
-        """根据order_id获取客户订单信息"""
-        namespace = ["wxxd_order", union_id]
-        key = order_id
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value", {})
-        else:
-            return {}
-    
-    def list_wxxd_order_by_union_id(self, union_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """根据union_id获取客户订单信息列表"""
-        namespace = ["wxxd_order", union_id]
-        response = self.store.search_items(namespace, limit=limit)
-        results = [item["value"] for item in response["items"]]
-        return results
-    
-    def list_all_wxxd_order(self, after_yyyy_mm_dd: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """获取所有客户订单信息（忽略namespace中的union_id）"""
-
-        namespace = ["wxxd_order"]
-        filter = {"YYYYMMDD": {"$gte": after_yyyy_mm_dd}}
-        response = self.store.search_items(namespace, filter=filter, limit=limit)
-        results = [item["value"] for item in response["items"]]
-        return results
-        
-    
-
-    # ==================== 全局状态 ====================
-
-    def get_scm_global_state(self, key: str) -> Optional[Any]:
-        """根据key获取全局状态"""
-        namespace = ["scm_global_state"]
-        key = key
-        result = self.store.get_item(namespace, key)
-        if result:
-            return result.get("value", {})
-        else:
-            return {}
-    
-    # ==================== 通用方法 ====================
-    
-    def search_items(self, namespace: List[str], filter: Optional[Dict[str, Any]] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """搜索items"""
-        return self.store.search_items(namespace, filter=filter, limit=limit)
-
-    def list_all_namespace(self):
-        """获取所有namespace"""
-        return self.store.list_namespaces()
-    
-
-# 工厂函数，方便创建客户端实例
 def create_scm_store_api(url: str, user_id: str, password: str) -> ScmStoreAPI:
-    """创建ScmStoreAPI实例"""
-
-    return ScmStoreAPI(url, user_id, password)
+    return ScmStoreAPI(server_url=url, user_id=user_id, password=password)

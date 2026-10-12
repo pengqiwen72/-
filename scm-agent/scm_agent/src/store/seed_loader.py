@@ -44,7 +44,7 @@ from utils.agent_logger import get_logger
 logger = get_logger("seed_loader")
 
 # data/seed 相对本文件：src/store/seed_loader.py -> ../../data/seed
-# ⚠️ 不要改回 `.resolve()`：Windows 上它会调 `os.getcwd()`，而本模块是在坐席
+# ⚠️ 不要改回 `.resolve()`：Windows 上它会调 `os.getcwd()`，而本模块是在演示
 # 工作台**首次请求**里才 import 的 —— blockbuster 会当场把请求打成 500（真踩过）。
 # 完整说明见 utils/env_loader.py；同理，`os.path.abspath` 只对绝对路径安全。
 _SEED_DIR = Path(__file__).parents[2] / "data" / "seed"

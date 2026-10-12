@@ -3,28 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>坐席工作台 · 电商智能客服与运营助手</title>
+  <title>演示工作台 · 供应链采购仓储智能系统</title>
   <!-- 相对路径：页面挂在 /scm/workbench 下，写绝对路径换前缀就 404 -->
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="brand">电商智能客服与运营助手<small>坐席工作台</small></div>
+  <div class="brand">供应链采购仓储智能系统<small>演示工作台</small></div>
   <div class="spacer"></div>
   <span class="badge" id="modeBadge" title="当前运行模式，来自 /scm/health">模式加载中…</span>
+  <button id="todoBtn" class="todo-btn" hidden title="还有会话停在人工审批">待办 <b id="todoCount">0</b></button>
   <span class="agent-chip" id="agentName">—</span>
   <button id="logoutBtn">退出</button>
 </header>
 
+<!-- 待办浮层：内容由 app.js 渲染，条目只存在浏览器本地（见 app.js 的说明） -->
+<div class="todo-panel" id="todoPanel" hidden></div>
+
 <main class="layout">
 
-  <!-- ============ 左：客户诉求 ============ -->
+  <!-- ============ 左：业务诉求 ============ -->
   <section>
     <div class="card">
-      <h2>客户诉求</h2>
+      <h2>业务诉求</h2>
       <div class="body">
-        <textarea id="input" placeholder="粘贴客户原话，或点下面的示例（Ctrl / ⌘ + Enter 发送）"></textarea>
+        <textarea id="input" placeholder="照原话输入一条诉求，或点下面的示例（Ctrl / ⌘ + Enter 发送）"></textarea>
         <div class="row">
           <span class="badge" id="threadBadge">新会话</span>
           <div class="spacer"></div>
@@ -37,7 +41,7 @@
     <div class="card">
       <h2>会话<small class="count" id="threadCount"></small></h2>
       <div class="body thread" id="thread">
-        <div class="empty">还没有会话。发送一条客户诉求，或点上面的示例。</div>
+        <div class="empty">还没有会话。发送一条业务诉求，或点上面的示例。</div>
       </div>
     </div>
   </section>

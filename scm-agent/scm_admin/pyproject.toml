@@ -1,7 +1,7 @@
 [project]
 name = "scm-admin"
 version = "0.1.0"
-description = "Cs 管理后台"
+description = "供应链采购仓储智能系统 · 审批看板（单页只读）"
 requires-python = "==3.12.*"
 dependencies = [
     "flask==3.1.2",

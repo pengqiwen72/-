@@ -23,7 +23,7 @@ class Chunk:
     section: str                        # 标题路径，如「采购管理办法 > 审批规则」
     text: str                           # 已注入标题上下文的正文（用于检索与展示）
     source: str                         # 相对路径，用于出处展示
-    kind: str = "policy"                # product / policy / faq
+    kind: str = "policy"                # 语料目录名：materials / policies / faq
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -102,7 +102,7 @@ class Citation:
 
 @dataclass
 class RagAnswer:
-    """商品咨询链路的最终产物。"""
+    """物料与制度问答链路的最终产物。"""
 
     answer: str = ""
     citations: List[Citation] = field(default_factory=list)

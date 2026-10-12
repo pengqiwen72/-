@@ -61,9 +61,9 @@ def synthesize_intent(view: PromptView) -> dict:
         keyword_score = score_intent_by_keywords(task_input, intent_id) * 3.0
 
         # 2) 与意图描述的 token 重叠（兜底，处理词表没覆盖的说法）
-        #    按 token 长度加权：双字词（"退货"）比单字（"客"）更能说明问题。
-        #    不加权的话，「客户说想退货」会因为和「正在和客户沟通」共享了
-        #    「客」「户」两个单字而被判成 chat_suggestion。
+        #    按 token 长度加权：tokenizer 同时产单字与双字，双字（"收货"）比
+        #    单字（"货"）更能说明意图。加权后单字命中权重为 0 —— 免得「货」
+        #    「仓」这类到处出现的字靠数量把某个意图顶上去。
         desc_tokens = set(tokenize(description))
         input_tokens = set(tokenize(task_input))
         overlap = sum(len(tok) - 1 for tok in (desc_tokens & input_tokens))

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>审批看板 · 供应链采购仓储智能系统</title>
+  <!-- 单页自己带样式：这个看板不引任何前端框架，clone 下来配上平台服务就能看 -->
+  <style>
+    :root {
+      --bg: #f4f6fb; --panel: #fff; --ink: #1f2430; --muted: #6b7280; --faint: #9aa3b2;
+      --line: #e6e9f0; --brand: #2f5bea; --ok: #0f9d58; --warn: #d97706; --err: #dc2626;
+      --ok-soft: #e9f7ef; --warn-soft: #fef4e6; --err-soft: #fdecec; --brand-soft: #eef2ff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink);
+           font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 16px 24px; }
+    header h1 { margin: 0; font-size: 16px; }
+    header p { margin: 4px 0 0; color: var(--faint); font-size: 12.5px; }
+    main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 40px; }
+
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+    .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+    .stat .k { color: var(--muted); font-size: 12.5px; }
+    .stat .v { font-size: 24px; font-weight: 600; margin-top: 4px; }
+    .stat .v.ok { color: var(--ok); }
+    .stat .s { color: var(--faint); font-size: 12px; margin-top: 2px; }
+
+    section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                   margin-top: 16px; overflow: hidden; }
+    section.card > h2 { margin: 0; padding: 13px 16px; font-size: 14px; border-bottom: 1px solid var(--line); }
+    .empty { color: var(--faint); padding: 26px 16px; text-align: center; font-size: 13px; }
+    .alert { margin-top: 16px; border-radius: 10px; padding: 12px 14px; font-size: 13px;
+             background: var(--err-soft); color: var(--err); }
+
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { background: var(--bg); color: var(--muted); font-weight: 500; }
+    tbody tr:last-child td { border-bottom: none; }
+    td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); }
+    .pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 12px; }
+    .pill.ok { background: var(--ok-soft); color: var(--ok); }
+    .pill.err { background: var(--err-soft); color: var(--err); }
+    .pill.warn { background: var(--warn-soft); color: var(--warn); }
+    .yes { color: var(--ok); }
+    .no { color: var(--faint); }
+
+    footer { color: var(--faint); font-size: 12px; margin-top: 18px; line-height: 1.9; }
+    footer code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>供应链采购仓储智能系统 · 审批看板</h1>
+  <p>单页只读：审批明细 + 一次通过率　|　数据来自平台服务 Store 的 <code>approval</code> 命名空间</p>
+</header>
+
+<main>
+  <div class="alert" id="error" hidden></div>
+
+  <div class="stats" id="stats"></div>
+
+  <section class="card">
+    <h2>审批明细<small id="countText" style="color:var(--faint);font-weight:400"></small></h2>
+    <div id="tableBox"></div>
+  </section>
+
+  <footer id="footnote">
+    口径：<b>一次通过</b> = 第 0 轮结论即「通过」（改判重报不算）；<b>一次通过率</b> = 一次通过数 ÷ 申请总数，
+    两边都只数第 0 轮；<b>返工次数</b> = 同一申请在第 1 轮及以后出现的审批记录条数。<br>
+    审批记录由业务链路在人工决策那一步写入（`integrations/idempotency.py::record_approval`，同一轮内首写胜 ——
+    节点重放不会记第二笔）。每条记录一行，所以同一申请的多轮审批在这里是可数的。
+  </footer>
+</main>
+
+<script>
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+
+/** 建 DOM。值来自 Store（自己写进去的，但仍按外部数据对待），一律 textContent。 */
+function el(tag, attrs = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === 'class') node.className = v;
+    else if (k === 'text') node.textContent = v;
+    else node.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return node;
+}
+
+const pill = (text, cls) => el('span', { class: 'pill ' + cls, text });
+
+function renderStats(s) {
+  const rate = s.first_pass_rate === null ? '—' : (s.first_pass_rate * 100).toFixed(1) + '%';
+  $('stats').replaceChildren(
+    el('div', { class: 'stat' },
+      el('div', { class: 'k', text: '申请总数（第 0 轮）' }), el('div', { class: 'v', text: String(s.plans) })),
+    el('div', { class: 'stat' },
+      el('div', { class: 'k', text: '一次通过' }), el('div', { class: 'v ok', text: String(s.first_pass) }),
+      el('div', { class: 's', text: '第 0 轮结论即「通过」' })),
+    el('div', { class: 'stat' },
+      el('div', { class: 'k', text: '一次通过率' }), el('div', { class: 'v ok', text: rate }),
+      el('div', { class: 's', text: '一次通过 ÷ 申请总数' })),
+    el('div', { class: 'stat' },
+      el('div', { class: 'k', text: '需多轮审批的申请' }), el('div', { class: 'v', text: String(s.reworked_plans) }),
+      el('div', { class: 's', text: '出现过第 1 轮及以后的记录' })),
+  );
+}
+
+function renderTable(records) {
+  $('countText').textContent = records.length ? '（' + records.length + ' 条）' : '';
+  if (!records.length) {
+    $('tableBox').replaceChildren(el('div', { class: 'empty', text:
+      '还没有审批记录。先起平台服务跑一轮审批场景（工作台上「采购申请（新供应商转人工审批）」这类），这里就会有内容。' }));
+    return;
+  }
+
+  const head = el('tr', {}, ...['时间', '业务类型', '单据', '方案', '轮次', '结论', '审批人', '一次通过', '返工次数', '会话']
+    .map((t) => el('th', { text: t })));
+  const body = el('tbody');
+  for (const r of records) {
+    const decisionClass = r.decision === 'approved' ? 'ok' : (r.decision === 'rejected' ? 'err' : 'warn');
+    body.append(el('tr', {},
+      el('td', { class: 'mono', text: r.created_at || '—' }),
+      el('td', { text: r.kind_text }),
+      el('td', { text: r.biz_id || '—' }),
+      el('td', { class: 'mono', title: r.plan_id || '', text: String(r.plan_id || '—').slice(0, 14) }),
+      el('td', { text: r.round_text }),
+      el('td', {}, pill(r.decision_text, decisionClass)),
+      el('td', { text: r.operator || '未署名' }),
+      el('td', { class: r.is_first_pass ? 'yes' : 'no', text: r.is_first_pass ? '✓' : '—' }),
+      el('td', { text: r.rework ? String(r.rework) : '—' }),
+      el('td', { class: 'mono', title: r.thread_id || '', text: String(r.thread_id || '').replace(/^scm-/, '').slice(0, 12) }),
+    ));
+  }
+  $('tableBox').replaceChildren(el('table', {}, el('thead', {}, head), body));
+}
+
+async function load() {
+  try {
+    const res = await fetch('/api/approvals');
+    const body = await res.json();
+    if (!body.success) {
+      $('error').textContent = '读取失败：' + body.error;
+      $('error').hidden = false;
+      $('tableBox').replaceChildren(el('div', { class: 'empty', text: '数据取不到，先按上面的提示检查平台服务与 .env。' }));
+      return;
+    }
+    $('error').hidden = true;
+    renderStats(body.data.stats);
+    renderTable(body.data.records);
+  } catch (e) {
+    $('error').textContent = '无法连接看板后端：' + (e.message || e);
+    $('error').hidden = false;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -47,7 +47,7 @@ def _force_utf8() -> None:
 
 # ==================== 场景定义 ====================
 
-# 场景表长在 `demo/scenarios.py`：命令行与坐席工作台的 `/scm/samples` 共用同一份，
+# 场景表长在 `demo/scenarios.py`：命令行与演示工作台的 `/scm/samples` 共用同一份，
 # 两处各写一遍迟早会漂移。从 `src` 导入，不依赖当前工作目录。
 from demo.scenarios import DEFAULT_ORDER, SCENARIOS  # noqa: E402
 
@@ -261,7 +261,7 @@ class _scenario_env:
     所以在进出场景时都调一次 `reset_ports()`：它会顺带关掉 MCP 会话，
     让下一次调用拿着**当前**的环境重新拉起网关。
 
-    这一条不修的话，`TOOL_GATEWAY=mcp` 下「注入物流故障」的场景会静默地
+    这一条不修的话，`TOOL_GATEWAY=mcp` 下「注入图谱故障」的场景会静默地
     跑成正常路径 —— 而它看起来只是「这次降级没触发」，不会报任何错。
     """
 

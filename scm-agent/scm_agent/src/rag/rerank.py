@@ -78,7 +78,7 @@ class LexicalReranker:
             if cand.preset_raw is not None:
                 # 自带分（图事实）：套用同一个饱和映射后直接采用（见模块文档）。
                 # title_hit 保持 0：图 chunk 的「标题」是「供应链知识图谱」，
-                # 与查询重合度天然为 0，它是商品维度收敛的判据，与图无关。
+                # 与查询重合度天然为 0，它是物料维度收敛的判据，与图无关。
                 cand.rerank = cand.preset_raw / (cand.preset_raw + SQUASH)
                 cand.title_hit = 0.0
                 continue
@@ -89,7 +89,7 @@ class LexicalReranker:
             )
             # 单独记录「查询与文档标题的重合度」。它不参与打分——打分改变会
             # 让置信度阈值整体位移，这里只需要一个诊断量，供上层判断
-            # 「客户问的是哪个商品」（见 `rag.index` 的 `_scope_products`）。
+            # 「问的是哪个物料」（见 `rag.index` 的 `_scope_materials`）。
             cand.title_hit = self._title_hit(query_terms, cand.chunk.doc_title)
 
         # 分数相同时用 fused 兜底，保证排序稳定（否则不同轮次结果会抖）

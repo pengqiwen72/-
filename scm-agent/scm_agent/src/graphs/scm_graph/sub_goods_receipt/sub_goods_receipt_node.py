@@ -307,6 +307,7 @@ def approval_node(state: SubGoodsReceiptState, config: RunnableConfig):
         thread_id=thread_id, plan_id=plan.plan_id,
         decision="approved" if approved else "rejected",
         operator=operator, revision=plan.revision,
+        biz_id=plan.biz_id, kind="receipt",
     )
     if not is_first:
         emit("idempotent_replay", detail=f"复核记录已存在，跳过重复写入（{plan.plan_id}）")
@@ -358,6 +359,7 @@ def _recreate_node(state: SubGoodsReceiptState, config: RunnableConfig,
     guard.record_approval(
         thread_id=thread_id, plan_id=plan.plan_id,
         decision="recreated", operator=operator, revision=plan.revision,
+        biz_id=plan.biz_id, kind="receipt",
     )
 
     disposition, notes = _apply_recreate_patch(patch)

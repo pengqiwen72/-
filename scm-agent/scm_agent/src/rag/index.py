@@ -1,9 +1,9 @@
 """
 索引装配与对外入口。
 
-对外只暴露一个 `ProductKnowledgeBase.ask(question) -> RagAnswer`，
+对外只暴露一个 `KnowledgeBase.ask(question) -> RagAnswer`，
 把「加载语料 → 分块 → 建索引 → 召回 → 重排 → 置信度 → 生成」这六步封在里面。
-调用方（`sub_product_qa` 子图、离线合成器、测试）都只依赖这一个方法。
+调用方（`sub_material_qa` 子图、离线合成器、测试）都只依赖这一个方法。
 
 缓存策略
 --------
@@ -59,11 +59,11 @@ DEFAULT_TOP_K = 3
 TITLE_SCOPE_MIN = 0.10
 
 # 语料指纹 -> 已构建的知识库（进程内缓存）
-_CACHE: Dict[str, "ProductKnowledgeBase"] = {}
+_CACHE: Dict[str, "KnowledgeBase"] = {}
 
 
-class ProductKnowledgeBase:
-    """商品知识库。一次构建，多次问答。"""
+class KnowledgeBase:
+    """知识库（物料规范 / 制度 / FAQ 三语料）。一次构建，多次问答。"""
 
     def __init__(self, chunks: List[Chunk], fingerprint: str = "",
                  graph_retrieve: Optional[Callable[[str], list]] = None):
@@ -97,7 +97,7 @@ class ProductKnowledgeBase:
         if not candidates:
             return []
         ranked = self.reranker.rerank(expanded, candidates)
-        ranked = self._scope_products(ranked)
+        ranked = self._scope_materials(ranked)
         ranked = self._keep_relation_evidence(ranked, channel, top_k)
         return ranked[:top_k]
 
@@ -144,10 +144,10 @@ class ProductKnowledgeBase:
         )
         return head[:-1] + [fact] + rest
 
-    # ---------- 商品维度收敛 ----------
+    # ---------- 物料维度收敛 ----------
 
-    def _scope_products(self, ranked: List[ScoredChunk]) -> List[ScoredChunk]:
-        """查询点名了某个对象（`kind="product"` 的文档）时，排除**其他对象**的片段。
+    def _scope_materials(self, ranked: List[ScoredChunk]) -> List[ScoredChunk]:
+        """查询点名了某个对象（`kind="materials"` 的文档）时，排除**其他对象**的片段。
 
         这类错误最典型的样子：问「M400301 怎么验收」，另一个物料的规格页里
         「抽检比例 10%」因为字面命中太强被召回 —— 答案里同时出现两个物料的
@@ -162,24 +162,24 @@ class ProductKnowledgeBase:
         空转；保留它是因为「一物料一页」是可预见的下一批语料，判据与阈值
         到那时候才真正起作用。
         """
-        products = [c for c in ranked if c.chunk.kind == "product"]
-        if len(products) <= 1:
+        objects = [c for c in ranked if c.chunk.kind == "materials"]
+        if len(objects) <= 1:
             return ranked
 
-        best = max(products, key=lambda c: c.title_hit)
+        best = max(objects, key=lambda c: c.title_hit)
         if best.title_hit < TITLE_SCOPE_MIN:
             return ranked
 
         scoped_doc = best.chunk.doc_id
         kept = [
             c for c in ranked
-            if c.chunk.kind != "product" or c.chunk.doc_id == scoped_doc
+            if c.chunk.kind != "materials" or c.chunk.doc_id == scoped_doc
         ]
         dropped = len(ranked) - len(kept)
         if dropped:
             logger.info(
-                f"商品维度收敛：查询命中商品「{best.chunk.doc_title}」"
-                f"（标题重合度 {best.title_hit:.2f}），排除其他商品片段 {dropped} 条"
+                f"物料维度收敛：查询命中物料文档「{best.chunk.doc_title}」"
+                f"（标题重合度 {best.title_hit:.2f}），排除其他物料片段 {dropped} 条"
             )
         return kept
 
@@ -188,7 +188,7 @@ class ProductKnowledgeBase:
     def ask(self, question: str, *, top_k: int = DEFAULT_TOP_K,
             model_text: Optional[str] = None,
             generator: Optional[Callable[[str, str], str]] = None) -> RagAnswer:
-        """回答商品咨询。
+        """回答物料与制度咨询。
 
         生成环节有两种接法，二选一：
 
@@ -288,7 +288,7 @@ def _graph_retriever() -> Optional[Callable[[str], list]]:
         return None
 
 
-def get_knowledge_base(*, force_rebuild: bool = False) -> ProductKnowledgeBase:
+def get_knowledge_base(*, force_rebuild: bool = False) -> KnowledgeBase:
     """取知识库（按语料指纹缓存）。"""
     docs = load_corpus()
     fingerprint = corpus_fingerprint(docs)
@@ -301,7 +301,7 @@ def get_knowledge_base(*, force_rebuild: bool = False) -> ProductKnowledgeBase:
     if vector_store_mode() in {"milvus", "remote", "http"}:
         chunks = _maybe_reindex_with_milvus(chunks)
 
-    kb = ProductKnowledgeBase(chunks, fingerprint, graph_retrieve=_graph_retriever())
+    kb = KnowledgeBase(chunks, fingerprint, graph_retrieve=_graph_retriever())
     _CACHE[fingerprint] = kb
     logger.info(f"知识库构建完成：{kb.stats()}")
 

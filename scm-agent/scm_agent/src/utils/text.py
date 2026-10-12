@@ -1,64 +1,12 @@
 """
-文本切分小工具。
+文本小工具：出处的展示路径拼接。
 
-抽到 `utils` 而不是各自写一份，是因为它编码的不只是字符串处理，而是一条
-**业务判断**：客户发来一大段话时，哪部分才是他真正在问的事。问答链路
-（`sub_product_qa`）和话术链路（`llm/offline/synth_ops`）都要做这个判断，
-两处必须给出同一个答案——否则同一条客户消息，问答链路去查破损赔付、
-话术链路去查交付时限，坐席看到的两个建议互相打架。
+这里只有一件事，但它是问答链路的**可信度**所在：出处必须能被人核对。
+制度语料里尤其明显——几份文档都有名为「审批规则」的小节，所以不能只写
+章节名而不写标题，否则「依据」两个字就是空的。
 """
 
 from __future__ import annotations
-
-import re
-from typing import List
-
-#: 句末标点：中文的。！？与半角的 !?
-_SENTENCE_SPLIT = re.compile(r"(?<=[。！？!?])\s*")
-
-#: 判定「这是在提问」的收尾标点
-_QUESTION_END = ("？", "?")
-
-
-def split_sentences(text: str) -> List[str]:
-    """按句末标点切句，丢掉空白与空句。"""
-    return [s.strip() for s in _SENTENCE_SPLIT.split(text or "") if s.strip()]
-
-
-def last_question_clause(text: str) -> str:
-    """取出客户消息**末尾连续的疑问句**，作为「客户在问什么」。
-
-    为什么既不是整段、也不是最后一句
-    ---------------------------------
-    客户的消息常常是复合的：
-
-        「好的，那就下单这个阅读灯。对了，如果收到发现灯臂有磕碰，
-          你们是怎么处理的？多久能给我答复？」
-
-    * **整段**去检索，「下单」「阅读灯」这些词会把查询稀释掉，
-      命中的条款跟着跑偏；
-    * **最后一句**（「多久能给我答复？」）又太短——「多久」「答复」
-      在知识库里到处都是，同样对不准；
-    * 真正要回答的是**末尾那一串疑问句**：前一句交代场景，后一句追问时限，
-      合起来才是完整诉求。
-
-    所以规则是：从末尾往前扫，收集连续的疑问句；一句疑问句都没有时
-    （例如「我想退货」这类陈述式诉求），退回最后一句。
-    """
-    sentences = split_sentences(text)
-    if not sentences:
-        return (text or "").strip()
-
-    collected: List[str] = []
-    for sent in reversed(sentences):
-        if not sent.endswith(_QUESTION_END):
-            break
-        collected.append(sent)
-
-    if not collected:
-        return sentences[-1]
-
-    return "".join(reversed(collected))
 
 
 def citation_path(title: str, section: str) -> str:

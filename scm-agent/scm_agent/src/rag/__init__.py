@@ -23,7 +23,7 @@ RAG 检索增强链路。
 from rag.index import (
     DEFAULT_RECALL_K,
     DEFAULT_TOP_K,
-    ProductKnowledgeBase,
+    KnowledgeBase,
     get_knowledge_base,
     reset_cache,
     vector_store_mode,
@@ -31,7 +31,7 @@ from rag.index import (
 from rag.types import Chunk, Citation, RagAnswer, ScoredChunk
 
 __all__ = [
-    "ProductKnowledgeBase",
+    "KnowledgeBase",
     "get_knowledge_base",
     "reset_cache",
     "vector_store_mode",

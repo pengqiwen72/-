@@ -1,7 +1,8 @@
 # MCP 工具网关
 
-把订单 / 物流 / 库存 / 售后能力以 [MCP](https://modelcontextprotocol.io) 协议暴露出去，
-说 stdio。Agent 侧作为客户端连接它，用一个开关切过去：
+把物料 / 供应商 / 仓库 / 库存 / 采购 / 收货能力以
+[MCP](https://modelcontextprotocol.io) 协议暴露出去，说 stdio。
+Agent 侧作为客户端连接它，用一个开关切过去：
 
 ```bash
 cd scm_agent
@@ -23,44 +24,63 @@ Agent 跟着提示词和编排走。中间隔一层标准协议之后：
 在 demo 里它更直接的作用是**证明端口抽象是真的**：`integrations/ports.py` 那套 Protocol
 现在有 mock / http / mcp 三套实现，节点代码一行没改。
 
-## 工具清单
+## 工具清单（18 个）
 
-| 工具 | 入参 | 说明 |
-|---|---|---|
-| `get_order` | `order_id` | 订单主数据 |
-| `list_orders_by_customer` | `customer_id`, `limit` | 客户名下订单（按时间倒序） |
-| `list_orders_by_range` | `start`, `end`, `limit` | 按下单区间取数，供统计与周报 |
-| `get_logistics` | `order_id` | 物流轨迹 |
-| `get_stock` | `sku_ids`, `warehouse` | 批量库存 |
-| `submit_refund` | `request`（含 `idempotency_key`） | 发起退款 |
-| `get_refund` | `refund_id` | 回查退款单 |
-| `create_ticket` | `request` | 转人工工单 |
+| 域 | 工具 | 入参 | 说明 |
+|---|---|---|---|
+| 物料 | `list_materials` | — | 全量物料主数据（装载用） |
+| 物料 | `search_materials` | `keyword`, `limit` | 按编码或名称片段搜索 |
+| 物料 | `get_material` | `material_code` | 单条物料；不存在 → `not_found` |
+| 物料 | `list_substitutes` | `material_code` | 登记在册的替代料 |
+| 供应商 | `list_suppliers` | — | 全量供应商档案（含履约指标） |
+| 供应商 | `get_supplier` | `supplier_code` | 单条供应商 |
+| 供应商 | `list_supplier_quotes` | `material_code` | 该物料各家报价**事实** |
+| 仓库 | `list_warehouses` | — | 全量仓库档案 |
+| 库存 | `list_stock` | — | 全量库存快照（物料 × 仓库） |
+| 库存 | `list_stock_by_material` | `material_code` | 某物料的多仓分布 |
+| 库存 | `list_stock_by_warehouse` | `warehouse_code` | 某仓库的物料清单（盘点视角） |
+| 采购 | `create_purchase_order` | `request`（含 `idempotency_key`） | 下达采购订单 |
+| 采购 | `get_purchase_order` | `po_no` | 按单号回查（含运行期下的单） |
+| 采购 | `list_purchase_orders` | — | 全量采购订单（装载用） |
+| 收货 | `submit_receipt` | `request`（含 `idempotency_key`） | 办理收货登记 |
+| 收货 | `get_receipt` | `receipt_no` | 回查收货记录（含质检报告地址） |
+| 兜底 | `create_ticket` | `request` | 转人工工单 |
+| 运维 | `ping` | — | 网关存活 + 背后指向 mock 还是真实系统 |
+
+两处**故意不做**，值得单独说明：
+
+* `list_supplier_quotes` 只给报价事实，**不做评分排名**；`list_stock_by_material`
+  只给分布，**不给调拨建议**。排名口径与调拨判据属于业务决策（权重、安全线、
+  高价告警），放在 Agent 侧（`sub_supplier` / `sub_inventory`）—— 网关一旦开始
+  替业务做判断，切到真实系统时这套判断就跟着网关注入进了别人的系统。
+* 网关不做字段映射（见下）。
 
 ## 返回信封
 
 工具**永远正常返回**，业务失败装在信封里：
 
 ```json
-{"ok": true,  "data": {"orderNo": "SO20260318002", "tradeStatus": "30", "...": "..."}}
-{"ok": false, "error": "not_found", "message": "订单 SO20260318002 暂无物流轨迹"}
+{"ok": true,  "data": {"matCode": "M100023", "matName": "冷轧钢板 1.2mm", "...": "..."}}
+{"ok": false, "error": "not_found", "message": "物料 M999999 不存在"}
 ```
 
 `error` 取 `not_found` / `unavailable` / `invalid` / `internal`。
 
 为什么不直接抛异常：MCP 协议层只有一个 `is_error`，它分不出
 
-- 「这单还没发货，所以查不到物流轨迹」—— 业务结论，要如实回答客户；
-- 「快递查询接口超时」—— 系统故障，要降级并转人工。
+- 「这个物料没有登记替代料」—— 业务结论，要如实回答，不是故障；
+- 「ERP 物料接口超时」—— 系统故障，要降级并转人工。
 
-这两件事在客服链路里的处理路径完全不同，所以必须由信封把语义带过去，
+这两件事在业务链路里的处理路径完全不同，所以必须由信封把语义带过去，
 `is_error` 只留给「工具实现本身崩了」。错误码到异常类的映射表只有一份
 （`scm_agent/src/integrations/mcp/envelope.py`），服务端和客户端引用同一份，
-避免出现「服务端抛 `LogisticsNotFound`、客户端还原成泛化的 `IntegrationError`」
+避免出现「服务端抛 `MaterialNotFound`、客户端还原成泛化的 `IntegrationError`」
 这种降级失真。
 
-信封里的 `data` 是**上游原样报文**，网关不做字段映射：归一化留在 Agent 侧。
-网关一旦开始改名换单位，就等于在三套端口实现之间凭空插进第四套口径，
-而它只在 `TOOL_GATEWAY=mcp` 时生效 —— 这种「只在某条路径上存在的规则」最难排查。
+信封里的 `data` 是**上游原样报文**，网关不做字段映射：归一化留在 Agent 侧
+（`integrations/normalize.py` 的字段别名表）。网关一旦开始改名换单位，就等于在
+三套端口实现之间凭空插进第四套口径，而它只在 `TOOL_GATEWAY=mcp` 时生效 ——
+这种「只在某条路径上存在的规则」最难排查。
 
 ## 直接跑
 
@@ -82,9 +102,9 @@ scm_agent/.venv/bin/python       -m mcp_server      # macOS / Linux
 {
   "mcpServers": {
     "scm-business-tools": {
-      "command": "E:/项目/ecom-cs-agent/scm_agent/.venv/Scripts/python.exe",
+      "command": "<仓库路径>/scm_agent/.venv/Scripts/python.exe",
       "args": ["-m", "mcp_server"],
-      "cwd": "E:/项目/ecom-cs-agent"
+      "cwd": "<仓库路径>"
     }
   }
 }
@@ -103,3 +123,8 @@ scm_agent/.venv/bin/python       -m mcp_server      # macOS / Linux
 | `INTEGRATION_MODE` | 网关背后接谁：`mock`（读种子）/ `http`（真实业务系统） |
 
 `TOOL_GATEWAY` 会被**强制**设成 `direct`：网关自己绝不能再走一次网关。
+
+> 还有一个只在 MCP 模式下才成立的坑：网关子进程的环境变量在**启动那一刻定格**，
+> 之后改父进程 `os.environ` 送不进去。所以场景级故障注入（`MOCK_FAIL_ACTIONS`）
+> 在进出场景时都要 `reset_ports()` 把网关关掉，让下一次调用拿新环境重启 ——
+> 否则「注入故障」的场景会静默跑成正常路径，且不报任何错。

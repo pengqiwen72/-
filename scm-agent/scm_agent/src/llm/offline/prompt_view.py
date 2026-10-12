@@ -4,16 +4,17 @@ PromptView —— 把现有提示词「反向解析」成结构化视图。
 为什么需要它
 ------------
 项目里所有 `llm_*.py` 都遵循同一套约定：把目标 Pydantic 模型的 `{schema_json}` /
-`{example_json}` 内嵌进提示词，再把业务数据块 `{chat_history}` / `{orders}` / ... 格式化进去。
+`{example_json}` 内嵌进提示词，再把业务数据块 `{materials}` / `{warehouses}` /
+`{purchase_orders}` ... 格式化进去。
 
 可这带来一个机会：提示词本身就是**自描述的**。离线合成器只要能解析出
 「这次要产出哪个模型」+「输入数据是什么」，就能合成出合法的结构化输出，
-而不必让 7 个调用方各写一套 mock —— 调用方零改动。
+而不必让 5 个调用方各写一套 mock —— 调用方零改动。
 
 解析要点
 --------
 不能靠正则匹配 `"title"`：pydantic 的 `model_json_schema()` 会为**每个字段**渲染 title，
-且 `$defs` 排在最前面，第一个 `"title"` 往往是字段名（如 "Tag Id"）而非类名。
+且 `$defs` 排在最前面，第一个 `"title"` 往往是字段名（如 "Material Code"）而非类名。
 正确做法是用 `json.JSONDecoder.raw_decode` 提取**顶层** JSON 值——`$defs` 是嵌套的，
 不会被单独提取出来，因此顶层 schema 的 `title` 就是类名。
 """
@@ -119,31 +120,20 @@ class PromptView:
     def find(self, *keys: str) -> Optional[dict]:
         """找出第一个包含全部指定键的**非 schema** 字典块。
 
-        各业务模型的顶层键在提示词里是唯一的（chat_msgs / orders / tag_setting ...），
-        所以可以据此反查输入数据，无需给每个合成器定制解析逻辑。
+        候选集块的顶层键是唯一的（`{"materials": [...]}` / `{"warehouses": [...]}` /
+        `{"purchase_orders": [...]}`），所以可以据此反查输入数据，无需给每个合成器
+        定制解析逻辑。
 
-        ⚠️ 「唯一」有一个例外：输入数据的顶层键与目标模型的 `{example_json}` 撞名时
-        （画像：示例实例和旧画像的顶层键都是 `profile_items`），这个函数会先撞上
-        示例实例。要取真实数据请用 `find_last`。
+        ⚠️ 只按**键**找是不安全的：`{example_json}` 里的示例实例可能与业务数据块
+        撞名（`ReceiptDraft` 的示例同样带 `po_no`，模板里示例又排在业务数据之前），
+        先命中的就会是示例。所以按值反查的地方不能只判键 —— 收货合成器的做法是
+        反向扫描 + **单号相等**（见 `synth_scm.synthesize_receipt_draft`），
+        只有单号对得上才采用，否则宁可留空等澄清。
         """
         for block in self.non_schema_dicts():
             if set(keys) <= set(block):
                 return block
         return None
-
-    def find_last(self, *keys: str) -> Optional[dict]:
-        """找出**最后一个**包含全部指定键的非 schema 字典块。
-
-        专治「输入数据块与 `{example_json}` 顶层键撞名」：提示词模板里示例排在业务
-        数据块之前（`{example_json}` → chat_history → ... → `{customer_profile}`），
-        所以撞名时真实数据永远是最后一块。画像合成器踩过这个坑 —— 用 `find` 会把
-        示例实例当成旧画像，存量项被示例项顶掉、示例文案混进结果。
-        """
-        hit: Optional[dict] = None
-        for block in self.non_schema_dicts():
-            if set(keys) <= set(block):
-                hit = block
-        return hit
 
     def find_list(self, *keys: str) -> Optional[list]:
         """找出第一个「元素为字典且包含指定键」的列表块。"""

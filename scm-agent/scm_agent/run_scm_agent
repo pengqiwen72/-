@@ -2,7 +2,7 @@
 # 启动 LangGraph 平台服务（含 webapp 的 /scm/* 路由，见 langgraph.json 的 http.app）。
 #
 # 只想看效果的话不用跑这个 —— 在仓库里直接 `python quickstart.py` 就能离线跑通全部链路。
-# 这里起的是「服务模式」：给坐席工作台、运营后台、以及需要 SSE 的客户端用。
+# 这里起的是「服务模式」：给演示工作台、审批看板、以及需要 SSE 的客户端用。
 echo "scm-agent 启动中……"
 
 uv sync

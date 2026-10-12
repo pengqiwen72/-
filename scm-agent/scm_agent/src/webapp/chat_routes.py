@@ -1,5 +1,5 @@
 """
-坐席工作台的后端接口：登录、流式对话、人工审批、状态回查。
+演示工作台的后端接口：登录、流式对话、人工审批、状态回查。
 
 为什么是**进程内**驱动图，而不是通过平台 SDK 远程调
 ----------------------------------------------------
@@ -27,9 +27,9 @@
     event: progress
     data: {"stage": "retrieve_done", "label": "检索完成", ...}
 
-事件类型见 `chat_stream` 的注释。**只有 progress 与终态会被推给浏览器**：
-节点更新（updates 通道）是图内部的增量状态，既大又暴露实现细节，
-推给前端只会让页面跟着图的重构一起改。
+事件类型见 `chat_stream` 的注释。**只有 progress、interrupt 派生出的 todo
+与终态会被推给浏览器**：节点更新（updates 通道）是图内部的增量状态，
+既大又暴露实现细节，推给前端只会让页面跟着图的重构一起改。
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from webapp.security import AgentIdentity, create_access_token, require_agent
 
 logger = get_logger("webapp_chat")
 
-router = APIRouter(prefix="/cs", tags=["坐席工作台"])
+router = APIRouter(prefix="/scm", tags=["演示工作台"])
 
 # ==================== 图实例 ====================
 
@@ -84,18 +84,23 @@ def _runner(agent: AgentIdentity) -> DemoRunner:
 # ==================== 请求模型 ====================
 
 class LoginRequest(BaseModel):
-    user_id: str = Field(..., description="坐席账号")
+    user_id: str = Field(..., description="演示账号")
     password: str = Field(..., description="登录口令")
 
 
 class ChatRequest(BaseModel):
-    task_input: str = Field(..., description="客户诉求原文")
+    task_input: str = Field(..., description="业务诉求原文")
     thread_id: Optional[str] = Field(default=None, description="留空则新建会话")
 
 
 class ResumeRequest(BaseModel):
     thread_id: str = Field(..., description="要恢复的会话")
-    decision: str = Field(default="ok", description="ok=确认 / discard=放弃 / recreate=重新生成")
+    decision: str = Field(default="ok", description="ok=批准 / discard=驳回 / recreate=改判重报")
+    patch: Optional[dict] = Field(
+        default=None,
+        description="recreate 时随处置一起改的字段：采购 supplier_code / qty / target_warehouse，"
+                    "收货 disposition。白名单之外的字段会被节点忽略并记进轨迹",
+    )
 
 
 # ==================== SSE ====================
@@ -111,6 +116,51 @@ SSE_HEADERS = {
     "X-Accel-Buffering": "no",
     "Connection": "keep-alive",
 }
+
+
+#: 中断载荷的 `type` → 待办标题。前端只渲染，不认识业务字段（与 STAGE_LABELS 同一分工）
+_TODO_TITLES = {
+    "purchase_approval": "采购申请待审批",
+    "quality_review": "收货复核待处理",
+}
+
+
+def _todo_detail(kind: str, value: dict) -> str:
+    """待办行的副标题：从中断载荷里挑几个能一眼认出是哪一单的字段。"""
+    parts = [str(v) for v in (value.get("biz_id"), value.get("material_name")) if v]
+    if kind == "purchase_approval":
+        qty, unit = value.get("qty"), str(value.get("unit") or "")
+        if isinstance(qty, (int, float)):
+            parts.append(f"{qty:g}{unit}")
+        amount = value.get("amount")
+        if isinstance(amount, (int, float)):
+            parts.append(f"{amount:.2f} 元")
+    elif kind == "quality_review":
+        rate = value.get("defect_rate")
+        if isinstance(rate, (int, float)):
+            parts.append(f"不良率 {rate:.2%}")
+    return " · ".join(parts) or str(value.get("description") or "有一笔待人工确认")
+
+
+def todo_item(thread_id: str, value: dict) -> dict:
+    """把中断载荷压成一条「待办」条目。
+
+    这是**纯渲染**用的帧。待办列表本身由前端维护在 localStorage：收到 `todo`
+    帧写入、收到 `done` / `error` 帧把该会话移出。后端不去写这份清单 —— HITL 的
+    第一条不变量就是「中断节点重放时必须无副作用」，为了待办落一次 store 会把它
+    破坏掉（同一笔审批恢复两次就记两条待办）。
+
+    标题在这里组装而不是丢给前端认识 `purchase_approval` / `quality_review`
+    两种载荷的字段，与 `STAGE_LABELS` 是同一个分工：文案只维护一处。
+    """
+    kind = str(value.get("type") or "")
+    return {
+        "thread_id": thread_id,
+        "kind": kind or "generic",
+        "title": _TODO_TITLES.get(kind, "待人工确认"),
+        "detail": _todo_detail(kind, value),
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 def _stream(payload: Any, config: dict, runner: DemoRunner) -> Iterator[str]:
@@ -134,10 +184,19 @@ def _stream(payload: Any, config: dict, runner: DemoRunner) -> Iterator[str]:
         # 只是让前端多剥一层。
         yield _sse(kind, {k: v for k, v in item.items() if k != "type"})
 
+        if kind == "interrupt":
+            # 卡片之外再推一条「待办」：页面刷新 / 换浏览器之后，右上角的角标
+            # 仍然能告诉你「还有哪一单在等人批」
+            first = (item.get("interrupts") or [{}])[0] or {}
+            yield _sse("todo", {
+                "thread_id": thread_id,
+                "item": todo_item(thread_id, first.get("value") or {}),
+            })
+
 
 # ==================== 接口 ====================
 
-@router.post("/get_token", summary="坐席登录，换取 JWT")
+@router.post("/get_token", summary="演示账号登录，换取 JWT")
 async def get_token(body: LoginRequest):
     """校验账号口令并签发 JWT。
 
@@ -167,7 +226,7 @@ async def get_token(body: LoginRequest):
 
 @router.post("/chat/stream", summary="发起一次对话（SSE）")
 async def chat_stream(body: ChatRequest, agent: AgentIdentity = Depends(require_agent)):
-    """流式跑一轮客服链路。
+    """流式跑一轮业务链路。
 
     事件类型：
 
@@ -176,6 +235,7 @@ async def chat_stream(body: ChatRequest, agent: AgentIdentity = Depends(require_
     | `open` | 已受理，带上 thread_id |
     | `progress` | 一条链路进度（stage / label / detail） |
     | `interrupt` | 停在人工审批，data.interrupts 里是审批卡片内容 |
+    | `todo` | 紧随 interrupt 的待办条目（纯渲染，见 `todo_item`） |
     | `done` | 跑完，data.task_result 是最终答复 |
     | `error` | 执行出错，data.message 是原因 |
     """
@@ -201,12 +261,24 @@ async def chat_resume(body: ResumeRequest, agent: AgentIdentity = Depends(requir
     ⚠️ 必须用**同一个 thread_id**，且恢复时要重发 user_id / external_id ——
     它们不从检查点恢复，漏发会让下游节点 KeyError（见 `demo/runner.py`）。
     这里由 `runner.thread_config()` 统一构造，不手拼 config。
+
+    `recreate`（改判重报）可以带 `patch` 一起提交：节点只改白名单里的字段
+    （采购 `supplier_code` / `qty` / `target_warehouse`，收货 `disposition`），
+    改完重走策略引擎 —— 复判不再命中审批条款就直接执行，这正是「一次通过率」
+    提升背后的那条路。白名单外的字段会被忽略并写进轨迹，不会静默生效。
     """
     runner = _runner(agent)
-    logger.info(f"[{agent.user_id}] 审批会话 {body.thread_id}：{body.decision}")
+    logger.info(f"[{agent.user_id}] 审批会话 {body.thread_id}：{body.decision}"
+                f" patch={sorted(body.patch) if body.patch else '-'}")
+
+    # 带 patch 时显式给出 HITL 协议的完整形状：裸字符串会被 hitl_payload 包成
+    # `{"confirmed": "recreate"}`，patch 只能挂在那个 dict 上一起传进去。
+    payload: Any = body.decision
+    if body.patch:
+        payload = {"confirmed": body.decision, "patch": body.patch}
 
     return StreamingResponse(
-        _stream(runner.resume_command(body.decision),
+        _stream(runner.resume_command(payload),
                 runner.thread_config(body.thread_id), runner),
         media_type="text/event-stream",
         headers=SSE_HEADERS,

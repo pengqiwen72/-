@@ -1,5 +1,5 @@
 """
-坐席工作台的 HTTP 入口。
+演示工作台的 HTTP 入口。
 
 两种起法都行：
 
@@ -14,8 +14,9 @@
   * `/scm/*`  业务接口（登录、流式对话、审批、状态回查）—— 见 `chat_routes.py`
   * 工作台页面与静态资源 —— 见 `static/`
 
-平台自己的路由不在这棵树里，由 `langgraph dev` 提供；这里所有路径都带 `/cs`
-前缀，正是为了不和平台路由撞车。
+平台自己的路由不在这棵树里，由 `langgraph dev` 提供；这里所有路径都带 `/scm`
+前缀，正是为了不和平台路由撞车（存储客户端 `scm_admin/scm_store_api` 认的
+`/scm/get_token` 也是这个前缀，改了前缀它就连不上）。
 """
 
 from __future__ import annotations
@@ -47,17 +48,17 @@ async def lifespan(app: FastAPI):
     # 启动时把三个开关打出来：这个服务能离线跑、也能接真实大模型和真实业务系统，
     # 排障第一步永远是先确认它到底跑在哪套配置上
     logger.info(
-        "scm-agent 坐席工作台启动 | LLM_MODE=%s INTEGRATION_MODE=%s TOOL_GATEWAY=%s",
+        "scm-agent 演示工作台启动 | LLM_MODE=%s INTEGRATION_MODE=%s TOOL_GATEWAY=%s",
         os.getenv("LLM_MODE", "offline"),
         os.getenv("INTEGRATION_MODE", "mock"),
         os.getenv("TOOL_GATEWAY", "direct"),
     )
     yield
-    logger.info("scm-agent 坐席工作台已停止")
+    logger.info("scm-agent 演示工作台已停止")
 
 
 app = FastAPI(
-    title="电商智能客服与运营助手 · 坐席工作台",
+    title="供应链采购仓储智能系统 · 演示工作台",
     description="LangGraph 多链路编排 + RAG + HITL 人工审批",
     version="1.0.0",
     lifespan=lifespan,

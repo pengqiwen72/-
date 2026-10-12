@@ -8,7 +8,7 @@
 
 'use strict';
 
-const KEY = { token: 'scm_token', user: 'scm_user', thread: 'scm_last_thread' };
+const KEY = { token: 'scm_token', user: 'scm_user', thread: 'scm_last_thread', todos: 'scm_todos' };
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,8 +45,9 @@ async function login(event) {
     const data = await res.json();
     localStorage.setItem(KEY.token, data.token);
     localStorage.setItem(KEY.user, data.user_id || userId);
-    // 上一轮的会话不能跨人恢复，换人登录就清掉
+    // 上一轮的会话与待办不能跨人恢复，换人登录就清掉
     localStorage.removeItem(KEY.thread);
+    localStorage.removeItem(KEY.todos);
 
     location.replace('index.html');
   } catch (e) {

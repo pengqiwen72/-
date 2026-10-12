@@ -8,7 +8,7 @@
 抛 RuntimeError 即放行），而 `os.getcwd()` 恰在被拦名单里。于是：
 
 * 模块在**服务启动时**就 import 的（`webapp.py`、`auth.py`）→ 碰不上守卫，一直没事；
-* 模块在**请求上下文里**才首次 import 的（`scm_graph.py` —— 坐席工作台首请求才建图）
+* 模块在**请求上下文里**才首次 import 的（`scm_graph.py` —— 演示工作台首请求才建图）
   → 整个请求直接 500：
 
       blockbuster.blockbuster.BlockingError: Blocking call to os.getcwd
