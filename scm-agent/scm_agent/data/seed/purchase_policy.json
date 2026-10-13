@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "采购审批策略。结构与 integrations/policy.py 的规则引擎一致：",
+    "  同一规则内 conditions 之间是 AND，规则之间按 priority 从大到小取第一条命中的，",
+    "  条件为空 {} 的规则是兜底（必须有，否则申请可能落进「无规则命中」的缝里）。",
+    "条件字段由 Phase 5 在 policy.py 的 CONDITION_CHECKS 里实现：",
+    "  amount_gte 金额达到阈值（元）/ is_new_supplier 新供应商 / lead_time_lt 交期短于（天）/",
+    "  price_over_avg_pct 报价高于同料均价（百分比）/ qty_lte 数量不超过（含单位口径由调用方保证）。",
+    "action.need_approval=true 的规则命中后走 interrupt 人工审批；reason_template 的占位符",
+    "只用事实对象里有的值（金额/数量/名称等），Phase 5 渲染时逐条校验。",
+    "剧情锚点：8000kg×5.60=44800 的申请走 PUR-002（新供应商）而不是 PUR-001（大额）。"
+  ],
+  "policies": [
+    {
+      "policy_id": "PUR-001",
+      "priority": 100,
+      "title": "大额采购需主管审批",
+      "conditions": { "amount_gte": 50000 },
+      "action": { "type": "purchase_create", "need_approval": true, "sla": "审批通过后 2 小时内下单" },
+      "reason_template": "采购金额 {amount} 元达到 50000 元大额标准，需采购主管审批后下单。"
+    },
+    {
+      "policy_id": "PUR-002",
+      "priority": 90,
+      "title": "新供应商首单需审批",
+      "conditions": { "is_new_supplier": true },
+      "action": { "type": "purchase_create", "need_approval": true, "sla": "审批通过后 2 小时内下单" },
+      "reason_template": "供应商 {supplier_name} 为新供应商，首单需审批后下单。"
+    },
+    {
+      "policy_id": "PUR-004",
+      "priority": 70,
+      "title": "报价高于近期均价需审批",
+      "conditions": { "price_over_avg_pct": 15 },
+      "action": { "type": "purchase_create", "need_approval": true, "sla": "审批通过后 2 小时内下单" },
+      "reason_template": "报价 {unit_price} 元高于近期均价 {avg_price} 元超过 15%，需审批确认。"
+    },
+    {
+      "policy_id": "PUR-003",
+      "priority": 60,
+      "title": "承诺交期过短需核实",
+      "conditions": { "lead_time_lt": 3 },
+      "action": { "type": "purchase_create", "need_approval": true, "sla": "核实产能后下单" },
+      "reason_template": "供应商承诺交期 {lead_time_days} 天短于 3 天，需核实产能与排产后下单。"
+    },
+    {
+      "policy_id": "PUR-005",
+      "priority": 50,
+      "title": "小额申请免审直采",
+      "conditions": { "qty_lte": 5000 },
+      "action": { "type": "purchase_create", "need_approval": false, "sla": "24 小时内下单" },
+      "reason_template": "申请数量 {qty}{unit} 未超过 5000，属于小额直采范围，免审批直接下单。"
+    },
+    {
+      "policy_id": "PUR-000",
+      "priority": 0,
+      "title": "常规采购流程",
+      "conditions": {},
+      "action": { "type": "purchase_create", "need_approval": false, "sla": "24 小时内下单" },
+      "reason_template": "申请未触发专项审批条件，按常规流程下单。"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# 统一按 LF 存储，避免 Windows/macOS 协作时整文件 diff
+* text=auto eol=lf
+
+# Windows 批处理脚本必须是 CRLF，否则 cmd.exe 解析出错
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：禁止行尾转换与 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# 语言统计：把 HTML 模板与前端资源从“文档/其他”里摘出来
+*.html linguist-language=HTML
+*.js   linguist-language=JavaScript
+*.css  linguist-language=CSS
+
+# 生成的检索索引与虚拟环境不作为语言统计，避免污染 GitHub 语言条
+data/index/**   linguist-generated=true
+*.lock          -diff linguist-generated=true

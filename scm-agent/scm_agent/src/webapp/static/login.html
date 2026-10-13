@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · 演示工作台</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="login-wrap">
+  <div class="card login-card">
+    <div class="head">
+      <h1>供应链采购仓储智能系统</h1>
+      <p>演示工作台 · LangGraph 多链路编排 + RAG 混合检索 + HITL 人工审批</p>
+    </div>
+    <div class="body">
+      <div class="alert" id="error" hidden></div>
+
+      <form id="loginForm">
+        <div class="field">
+          <label for="userId">演示账号</label>
+          <input id="userId" name="userId" value="OP001" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="password">登录口令</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="primary" type="submit" id="submitBtn">登录</button>
+      </form>
+
+      <p class="hint">
+        演示账号 <code>OP001</code>（采购员）；口令取自 <code>.env</code> 的
+        <code>DEMO_USER_PASSWORD</code>，未配置时使用内置口令 <code>scm-demo-2026</code>。<br>
+        登录成功后签发 JWT，后续每个接口都带它 —— 身份在令牌里，不再是一个共享的静态令牌。
+      </p>
+    </div>
+  </div>
+</div>
+
+<script src="login.js"></script>
+</body>
+</html>

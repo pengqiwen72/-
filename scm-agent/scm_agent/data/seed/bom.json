@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "物料清单（BOM）：组件半成品 -> 原材料/外购件，qty_per 是单台用量。",
+    "用途：断料影响分析——某个原料缺货时，能反查它会卡住哪些组件（问答链路的关系证据之一）。",
+    "parent_code 也必须是 materials.json 里的物料（M700101/M700102 是组件半成品）。"
+  ],
+  "bom": [
+    { "bom_id": "BOM-001", "parent_code": "M700101", "component_code": "M100023", "qty_per": 45.5 },
+    { "bom_id": "BOM-002", "parent_code": "M700101", "component_code": "M100061", "qty_per": 12.5 },
+    { "bom_id": "BOM-003", "parent_code": "M700101", "component_code": "M200101", "qty_per": 24 },
+    { "bom_id": "BOM-004", "parent_code": "M700101", "component_code": "M200103", "qty_per": 24 },
+    { "bom_id": "BOM-005", "parent_code": "M700101", "component_code": "M100081", "qty_per": 8.2 },
+    { "bom_id": "BOM-006", "parent_code": "M700102", "component_code": "M300201", "qty_per": 3 },
+    { "bom_id": "BOM-007", "parent_code": "M700102", "component_code": "M300204", "qty_per": 36 },
+    { "bom_id": "BOM-008", "parent_code": "M700102", "component_code": "M100052", "qty_per": 6.4 }
+  ]
+}

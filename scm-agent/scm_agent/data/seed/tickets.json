@@ -1,0 +1,13 @@
+{
+  "_comment": [
+    "异常工单（质量异议/交付延迟/发票差异）。MCP 工具 create_ticket 建的新工单也长这个样子。",
+    "po_no 可空——不是所有工单都挂在采购单上。"
+  ],
+  "tickets": [
+    { "ticket_no": "TK20260923001", "type": "质量异议", "material_code": "M100070", "po_no": "PO20260920001", "description": "到货铜排表面氧化变色，与供应商确认后整批退货。", "status": "已关闭", "operator_id": "OP003", "days_ago": 15 },
+    { "ticket_no": "TK20260927001", "type": "交付延迟", "material_code": "M200101", "po_no": "PO20260926001", "description": "紧固件到货较承诺交期晚 2 天，已提醒供应商加强排产。", "status": "已关闭", "operator_id": "OP001", "days_ago": 10 },
+    { "ticket_no": "TK20261001001", "type": "质量异议", "material_code": "M400301", "po_no": "PO20260928002", "description": "轴承外箱破损，等待收货质检结论，暂缓入库。", "status": "处理中", "operator_id": "OP003", "days_ago": 8 },
+    { "ticket_no": "TK20261003001", "type": "发票差异", "material_code": "M100023", "po_no": "PO20260928001", "description": "发票金额与订单相差 120 元，待供应商重开。", "status": "处理中", "operator_id": "OP001", "days_ago": 6 },
+    { "ticket_no": "TK20261006001", "type": "交付延迟", "material_code": "M600501", "po_no": "PO20261005001", "description": "化工辅料运输车辆延误，预计晚 1 天到货。", "status": "处理中", "operator_id": "OP001", "days_ago": 2 }
+  ]
+}

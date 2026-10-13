@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "收货单（历史记录）。po_no 必须能在 purchase_orders.json 里找到——_verify 会拦下悬空引用。",
+    "defect_rate 在这里不写死，由 qty_received / qty_defect 推出（models/scm_models.py::ReceiptPlan.compute_defect_rate）。",
+    "剧情锚点：RC20260922001 是「不良率 15% 整批退货」的历史先例，质检话术可以引用它；",
+    "两个在途 PO（PO20260928001 / PO20260928002）刻意不预置收货单——它们是演示时现场登记的。"
+  ],
+  "receipts": [
+    { "receipt_no": "RC20260922001", "po_no": "PO20260920001", "material_code": "M100070", "qty_expected": 300, "qty_received": 300, "qty_defect": 45, "defect_type": "氧化变色", "disposition": "退货", "warehouse_code": "WH01", "supplier_code": "S001", "inspector": "OP003", "days_ago": 15 },
+    { "receipt_no": "RC20260924001", "po_no": "PO20260922001", "material_code": "M100011", "qty_expected": 5000, "qty_received": 5000, "qty_defect": 12, "defect_type": "表面划伤", "disposition": "入库", "warehouse_code": "WH01", "supplier_code": "S001", "inspector": "OP003", "days_ago": 13 },
+    { "receipt_no": "RC20260926001", "po_no": "PO20260924001", "material_code": "M300201", "qty_expected": 200, "qty_received": 200, "qty_defect": 0, "defect_type": "", "disposition": "入库", "warehouse_code": "WH01", "supplier_code": "S003", "inspector": "OP003", "days_ago": 12 },
+    { "receipt_no": "RC20260928001", "po_no": "PO20260926001", "material_code": "M200101", "qty_expected": 20000, "qty_received": 19800, "qty_defect": 220, "defect_type": "尺寸超差", "disposition": "入库", "warehouse_code": "WH03", "supplier_code": "S002", "inspector": "OP003", "days_ago": 10 },
+    { "receipt_no": "RC20261002001", "po_no": "PO20260930001", "material_code": "M500401", "qty_expected": 300, "qty_received": 298, "qty_defect": 3, "defect_type": "包装破损", "disposition": "入库", "warehouse_code": "WH03", "supplier_code": "S005", "inspector": "OP003", "days_ago": 5 }
+  ]
+}

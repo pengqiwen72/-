@@ -1,0 +1,14 @@
+{
+  "_comment": [
+    "供应商框架合同。signed_days_ago + valid_months 推出到期时间，不写死日期（同 days_ago 的道理）。",
+    "状态是相对当前时间判的：剩余有效期 < 90 天记「即将到期」，问答链路可以用它解释「为什么这家的价格还能锁住」。"
+  ],
+  "contracts": [
+    { "contract_no": "HT-2025-001", "supplier_code": "S001", "category": "金属原材料", "signed_days_ago": 380, "valid_months": 36, "price_terms": "季度调价，随行就市", "status": "生效" },
+    { "contract_no": "HT-2024-018", "supplier_code": "S002", "category": "紧固件", "signed_days_ago": 560, "valid_months": 24, "price_terms": "年度框架价", "status": "生效" },
+    { "contract_no": "HT-2024-022", "supplier_code": "S003", "category": "电气元件", "signed_days_ago": 520, "valid_months": 24, "price_terms": "年度框架价，季度返点", "status": "即将到期" },
+    { "contract_no": "HT-2025-006", "supplier_code": "S004", "category": "轴承传动", "signed_days_ago": 300, "valid_months": 24, "price_terms": "年度框架价", "status": "生效" },
+    { "contract_no": "HT-2025-009", "supplier_code": "S005", "category": "包装材料", "signed_days_ago": 260, "valid_months": 24, "price_terms": "半年调价", "status": "生效" },
+    { "contract_no": "HT-2025-012", "supplier_code": "S006", "category": "化工辅料", "signed_days_ago": 200, "valid_months": 12, "price_terms": "年度框架价", "status": "生效" }
+  ]
+}

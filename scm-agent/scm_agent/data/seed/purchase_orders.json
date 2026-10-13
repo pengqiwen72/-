@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "采购订单。amount 必须等于 qty × unit_price——seed_loader._verify 会逐条核对，金额自洽是硬约束。",
+    "status 用机器码 + status_text 中文文案，和线上一样由归一层的口径决定展示。",
+    "剧情锚点：PO20260928001（M100023，8000kg）与 PO20260928002（M400301，1000 支）都是 in_transit，",
+    "分别是「常规收货入库」和「不良率超阈值复核」两个收货场景的挂载点——改状态前先想清楚。"
+  ],
+  "purchase_orders": [
+    { "po_no": "PO20260920001", "request_id": "PR20260918002107", "material_code": "M100070", "qty": 300, "unit": "kg", "unit_price": 68.00, "amount": 20400.00, "supplier_code": "S001", "target_warehouse": "WH01", "status": "received", "status_text": "已入库", "days_ago": 17, "operator_id": "OP001" },
+    { "po_no": "PO20260922001", "request_id": "PR20260920008314", "material_code": "M100011", "qty": 5000, "unit": "kg", "unit_price": 4.30, "amount": 21500.00, "supplier_code": "S001", "target_warehouse": "WH01", "status": "received", "status_text": "已入库", "days_ago": 15, "operator_id": "OP001" },
+    { "po_no": "PO20260924001", "request_id": "PR20260922005621", "material_code": "M300201", "qty": 200, "unit": "个", "unit_price": 18.60, "amount": 3720.00, "supplier_code": "S003", "target_warehouse": "WH01", "status": "received", "status_text": "已入库", "days_ago": 13, "operator_id": "OP001" },
+    { "po_no": "PO20260926001", "request_id": "PR20260924009275", "material_code": "M200101", "qty": 20000, "unit": "个", "unit_price": 0.42, "amount": 8400.00, "supplier_code": "S002", "target_warehouse": "WH03", "status": "received", "status_text": "已入库", "days_ago": 11, "operator_id": "OP001" },
+    { "po_no": "PO20260928001", "request_id": "PR20260926004188", "material_code": "M100023", "qty": 8000, "unit": "kg", "unit_price": 5.60, "amount": 44800.00, "supplier_code": "S012", "target_warehouse": "WH01", "status": "in_transit", "status_text": "在途", "days_ago": 9, "operator_id": "OP001" },
+    { "po_no": "PO20260928002", "request_id": "PR20260926007366", "material_code": "M400301", "qty": 1000, "unit": "支", "unit_price": 12.50, "amount": 12500.00, "supplier_code": "S004", "target_warehouse": "WH02", "status": "in_transit", "status_text": "在途", "days_ago": 8, "operator_id": "OP001" },
+    { "po_no": "PO20260930001", "request_id": "PR20260928001543", "material_code": "M500401", "qty": 300, "unit": "个", "unit_price": 68.00, "amount": 20400.00, "supplier_code": "S005", "target_warehouse": "WH03", "status": "received", "status_text": "已入库", "days_ago": 6, "operator_id": "OP001" },
+    { "po_no": "PO20261001001", "request_id": "PR20260929008872", "material_code": "M100041", "qty": 800, "unit": "kg", "unit_price": 26.80, "amount": 21440.00, "supplier_code": "S001", "target_warehouse": "WH01", "status": "created", "status_text": "待发货", "days_ago": 4, "operator_id": "OP001" },
+    { "po_no": "PO20261005001", "request_id": "PR20261003006219", "material_code": "M600501", "qty": 20, "unit": "桶", "unit_price": 860.00, "amount": 17200.00, "supplier_code": "S006", "target_warehouse": "WH04", "status": "in_transit", "status_text": "在途", "days_ago": 2, "operator_id": "OP001" }
+  ]
+}

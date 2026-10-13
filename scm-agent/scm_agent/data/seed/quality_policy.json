@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "收货质检策略。规则结构与 purchase_policy.json 相同（AND + priority 降序首命中 + 空 {} 兜底）。",
+    "条件字段 defect_rate_gt 是「不良率超过阈值（小数，0.02 = 2%）」，由 Phase 5 在 CONDITION_CHECKS 里实现。",
+    "剧情锚点：PO20260928002 的现场收货「实收 920、不良 30」不良率 3.26% —— 命中 QC-001 走人工复核，",
+    "复核时可用 recreate + patch 只改处置方式（如「退货」→「让步接收」），这是「一次通过率」故事的落点。"
+  ],
+  "policies": [
+    {
+      "policy_id": "QC-001",
+      "priority": 100,
+      "title": "不良率超阈值需质检复核",
+      "conditions": { "defect_rate_gt": 0.02 },
+      "action": { "type": "receipt_check", "need_approval": true, "sla": "复核结论 4 小时内给出" },
+      "reason_template": "到货不良率 {defect_rate_pct} 超过 2% 阈值（实收 {qty_received}，不良 {qty_defect}），需质检主管复核处置方式。"
+    },
+    {
+      "policy_id": "QC-000",
+      "priority": 0,
+      "title": "常规收货入库",
+      "conditions": {},
+      "action": { "type": "receipt_check", "need_approval": false, "sla": "当日完成入库" },
+      "reason_template": "到货不良率 {defect_rate_pct} 未超过 2% 阈值，按常规流程验收入库。"
+    }
+  ]
+}

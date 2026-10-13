@@ -1,0 +1,17 @@
+#!/bin/bash
+# 启动 LangGraph 平台服务（含 webapp 的 /scm/* 路由，见 langgraph.json 的 http.app）。
+#
+# 只想看效果的话不用跑这个 —— 在仓库里直接 `python quickstart.py` 就能离线跑通全部链路。
+# 这里起的是「服务模式」：给演示工作台、审批看板、以及需要 SSE 的客户端用。
+echo "scm-agent 启动中……"
+
+uv sync
+
+# 两个环境上的坑都在这行里解决：
+#   * 不写 `uv run langgraph` —— 在 Windows/Git-Bash 下会撞 uv 的 trampoline
+#     报 "failed to canonicalize script path"，服务根本起不来。
+#     `python -m langgraph_cli` 是等价入口，且不依赖 Scripts/ 下的 .exe 垫片。
+#   * PYTHONUTF8=1 让这个进程（以及它拉起的子进程）统一按 UTF-8 处理文件与日志，
+#     不受系统 GBK 影响。
+PYTHONUTF8=1 nohup uv run python -m langgraph_cli dev --host 0.0.0.0 --port 2024 >> scm_agent.log 2>&1 &
+echo "已在后台启动，日志：scm_agent.log；端口 2024"

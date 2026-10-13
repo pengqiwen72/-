@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "供应商主数据。is_new=true 表示尚未合作过——采购策略 PUR-002（首单需审批）判的就是它。",
+    "on_time_rate / defect_rate 是履约统计口径（[0,1]），供应商评分链路会读。",
+    "剧情锚点：S012 是新供应商，给 M100023 的报价 5.60 元/kg 即采购审批场景的供应商；S007 交期 2 天，可触发 PUR-003（交期过短）。"
+  ],
+  "suppliers": [
+    { "supplier_code": "S001", "supplier_name": "宝钢华东物资有限公司", "is_new": false, "lead_time_days": 7, "on_time_rate": 0.98, "defect_rate": 0.004, "cooperation_since": "2019-03", "main_categories": ["金属原材料"] },
+    { "supplier_code": "S002", "supplier_name": "江苏宏泰紧固件厂", "is_new": false, "lead_time_days": 5, "on_time_rate": 0.96, "defect_rate": 0.008, "cooperation_since": "2018-06", "main_categories": ["紧固件"] },
+    { "supplier_code": "S003", "supplier_name": "上海正泰机电设备", "is_new": false, "lead_time_days": 4, "on_time_rate": 0.97, "defect_rate": 0.005, "cooperation_since": "2020-01", "main_categories": ["电气元件"] },
+    { "supplier_code": "S004", "supplier_name": "无锡精工轴承销售", "is_new": false, "lead_time_days": 6, "on_time_rate": 0.95, "defect_rate": 0.010, "cooperation_since": "2019-11", "main_categories": ["轴承传动"] },
+    { "supplier_code": "S005", "supplier_name": "苏州华宇包装材料", "is_new": false, "lead_time_days": 3, "on_time_rate": 0.99, "defect_rate": 0.003, "cooperation_since": "2021-04", "main_categories": ["包装材料"] },
+    { "supplier_code": "S006", "supplier_name": "浙江润博化工辅料", "is_new": false, "lead_time_days": 5, "on_time_rate": 0.94, "defect_rate": 0.012, "cooperation_since": "2020-08", "main_categories": ["化工辅料"] },
+    { "supplier_code": "S007", "supplier_name": "宁波振兴钢贸", "is_new": false, "lead_time_days": 2, "on_time_rate": 0.91, "defect_rate": 0.018, "cooperation_since": "2022-02", "main_categories": ["金属原材料"] },
+    { "supplier_code": "S008", "supplier_name": "常州精密紧固件", "is_new": false, "lead_time_days": 6, "on_time_rate": 0.97, "defect_rate": 0.006, "cooperation_since": "2021-09", "main_categories": ["紧固件"] },
+    { "supplier_code": "S009", "supplier_name": "杭州德力西电气经销", "is_new": false, "lead_time_days": 5, "on_time_rate": 0.96, "defect_rate": 0.009, "cooperation_since": "2019-05", "main_categories": ["电气元件"] },
+    { "supplier_code": "S010", "supplier_name": "南京洛轴销售中心", "is_new": false, "lead_time_days": 4, "on_time_rate": 0.93, "defect_rate": 0.015, "cooperation_since": "2022-06", "main_categories": ["轴承传动"] },
+    { "supplier_code": "S011", "supplier_name": "嘉兴包装制品厂", "is_new": false, "lead_time_days": 4, "on_time_rate": 0.95, "defect_rate": 0.011, "cooperation_since": "2023-03", "main_categories": ["包装材料"] },
+    { "supplier_code": "S012", "supplier_name": "华东新材科技股份有限公司", "is_new": true, "lead_time_days": 10, "on_time_rate": 0.0, "defect_rate": 0.0, "cooperation_since": "", "main_categories": ["金属原材料"] }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "_comment": "仓库主数据（四个仓）。库存分布、调拨建议、收货登记的仓库编码都以这里为准。",
+  "warehouses": [
+    { "warehouse_code": "WH01", "warehouse_name": "上海临港中心仓", "city": "上海", "address": "浦东新区临港新片区物流园 A 区 3 号库" },
+    { "warehouse_code": "WH02", "warehouse_name": "苏州工业园仓", "city": "苏州", "address": "工业园区唯亭镇普洛斯物流园 B2 库" },
+    { "warehouse_code": "WH03", "warehouse_name": "杭州萧山仓", "city": "杭州", "address": "萧山区新街街道传化公路港 C3 库" },
+    { "warehouse_code": "WH04", "warehouse_name": "宁波北仑港仓", "city": "宁波", "address": "北仑区大碶街道港城物流园 D1 库" }
+  ]
+}
