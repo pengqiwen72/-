@@ -1,14 +1,26 @@
 # 项目集 · Projects
 
-本仓库收录三个可直接运行的项目。各自独立成目录、各有完整的 README：
+本仓库收录四个可直接运行的项目。各自独立成目录、各有完整的 README：
 
 | 目录 | 项目 | 一句话 | 技术栈 |
 |---|---|---|---|
 | [`ecom-cs-agent/`](ecom-cs-agent/) | **电商智能客服与运营助手** | LangGraph 多链路客服智能体：RAG 商品咨询、订单多系统编排、售后政策引擎 + 人工审批 + 幂等、运营周报；clone 后零配置离线跑通全部链路 | Python · LangGraph · FastAPI · Pydantic |
+| [`ecom-profile-agent/`](ecom-profile-agent/) | **电商买家画像智能体（云集优选）** | LangGraph 买家画像系统：坐席侧边栏一键生成 32 项电商画像（消费偏好/价格敏感度/流失风险等）→ 人工确认 → 后台会员详情落库；含会员标签、导购话术、售后客服、日程安排子图 | Python · LangGraph · FastAPI · Playwright |
 | [`scm-agent/`](scm-agent/) | **供应链采购仓储智能系统** | LangGraph 业务智能体：制度问答（RAG × 图谱双通道）、采购申请策略引擎 + 人工审批 + 幂等、收货质检复核、库存预警与调拨、供应商比价与履约评分；clone 后零配置离线跑通全部链路 | Python · LangGraph · FastAPI · Pydantic |
 | [`storyboard-studio/`](storyboard-studio/) | **分镜工坊** | 把小说文本翻译成**可执行的镜头语言**：先做叙事层的节拍分解，再做执行层的镜头设计，分镜师可在界面上改到能用为止 | Next.js · TypeScript |
 
 ## 快速开始
+
+### 电商买家画像智能体（云集优选）
+
+```bash
+cd ecom-profile-agent
+# 1. 各模块配置 .env（大模型 API Key、坐席与后台账号；.env 不入库，见各目录 README 说明）
+# 2. 启动智能体（先起，其余服务依赖它获取 token）
+cd ecom_agent && ../.venv/Scripts/langgraph.exe dev --port 2024 --no-browser --no-reload
+# 3. 启动后台管理与侧边栏（Windows 下可直接双击根目录 start_all.bat）
+# 4. 侧边栏 http://127.0.0.1:8000/ecom_web/login.html 登录后触发画像/标签/话术生成
+```
 
 ### 电商智能客服与运营助手
 
@@ -37,6 +49,6 @@ npm install && npm run dev
 
 ## 说明
 
-* 三个项目各自独立开发，提交历史都完整保留在本仓库（按各自目录前缀可追溯）。
+* 各个项目独立开发，提交历史都完整保留在本仓库（按各自目录前缀可追溯）。
 * `ecom-cs-agent/` 与 `scm-agent/` 的定位是「基于工作中同类系统的架构，抽取出的
   个人可运行 demo」，不是生产代码；演示数据全部虚构。详细说明见各自目录下的 README。

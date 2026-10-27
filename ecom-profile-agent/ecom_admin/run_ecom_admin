@@ -1,0 +1,8 @@
+#!/bin/bash
+echo "Ecom Admin Starting... "
+
+uv sync
+
+nohup uv run ecom_admin_app.py >> ecom_admin.log 2>&1 &
+
+echo "Ecom Admin Started"

@@ -1,0 +1,9 @@
+#!/bin/bash
+echo "Ecom Sidebar Starting... "
+
+uv sync
+
+
+nohup uv run ecom_sidebar_app.py >> ecom_sidebar.log 2>&1 &
+
+echo "Ecom Sidebar Started"
